@@ -45,6 +45,15 @@ def test_load_config_uses_default_log_level_when_section_is_missing(tmp_path: Pa
     assert config.log_level == "INFO"
 
 
+def test_load_config_strips_surrounding_whitespace_from_token(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[discord]\ntoken = "  token-value  "\nguild_id = 42\n', encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.discord.token == "token-value"
+
+
 def test_load_config_raises_for_missing_file(tmp_path: Path) -> None:
     missing_path = tmp_path / "missing.toml"
 
@@ -83,6 +92,14 @@ def test_load_config_raises_for_missing_required_value(tmp_path: Path) -> None:
 def test_load_config_raises_for_empty_token(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text('[discord]\ntoken = "   "\nguild_id = 42\n', encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="discord.token must be a non-empty string"):
+        load_config(config_path)
+
+
+def test_load_config_raises_for_non_string_token(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[discord]\ntoken = 123\nguild_id = 42\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="discord.token must be a non-empty string"):
         load_config(config_path)

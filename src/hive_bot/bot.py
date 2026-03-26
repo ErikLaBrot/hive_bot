@@ -44,7 +44,7 @@ def create_bot(
         LOGGER.info("Discord client ready as %s (%s)", user, user.id)
 
     bot.setup_hook = setup_hook
-    bot.on_ready = on_ready
+    bot.add_listener(on_ready, "on_ready")
     return bot
 
 

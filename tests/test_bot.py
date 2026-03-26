@@ -6,17 +6,10 @@ import asyncio
 import logging
 from typing import Any
 
+import pytest
+
 from hive_bot.bot import create_bot, run_bot
 from hive_bot.config import AppConfig, DiscordConfig
-
-
-class FakeIntents:
-    default_calls = 0
-
-    @classmethod
-    def default(cls) -> str:
-        cls.default_calls += 1
-        return "default-intents"
 
 
 class FakeObject:
@@ -30,7 +23,11 @@ class FakeBot:
         self.intents = intents
         self.tree = "tree"
         self.user: Any = None
+        self.listeners: list[tuple[Any, str]] = []
         self.run_calls: list[tuple[str, Any]] = []
+
+    def add_listener(self, callback: Any, name: str) -> None:
+        self.listeners.append((callback, name))
 
     def run(self, token: str, *, log_handler: Any) -> None:
         self.run_calls.append((token, log_handler))
@@ -39,12 +36,6 @@ class FakeBot:
 class FakeCommandsModule:
     when_mentioned = "when-mentioned"
     Bot = FakeBot
-
-
-class FakeDiscordModule:
-    Intents = FakeIntents
-    Object = FakeObject
-    app_commands = "app-commands-module"
 
 
 class FakeUser:
@@ -59,10 +50,27 @@ def build_config() -> AppConfig:
     return AppConfig(discord=DiscordConfig(token="token-value", guild_id=42), log_level="INFO")
 
 
+def build_fake_discord_module(*, default_intents: str = "default-intents") -> tuple[Any, list[str]]:
+    calls: list[str] = []
+
+    class FakeIntents:
+        @classmethod
+        def default(cls) -> str:
+            calls.append("default")
+            return default_intents
+
+    class FakeDiscordModule:
+        Intents = FakeIntents
+        Object = FakeObject
+        app_commands = "app-commands-module"
+
+    return FakeDiscordModule, calls
+
+
 def test_create_bot_builds_discord_bot_with_default_intents() -> None:
-    FakeIntents.default_calls = 0
     register_calls: list[tuple[Any, Any]] = []
     sync_calls: list[tuple[Any, Any]] = []
+    fake_discord_module, intents_calls = build_fake_discord_module()
 
     def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
         register_calls.append((tree, app_commands_module))
@@ -73,7 +81,7 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
 
     bot = create_bot(
         build_config(),
-        discord_module=FakeDiscordModule,
+        discord_module=fake_discord_module,
         commands_module=FakeCommandsModule,
         register_commands_func=fake_register_commands,
         sync_commands_func=fake_sync_commands,
@@ -81,7 +89,9 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
 
     assert bot.command_prefix == "when-mentioned"
     assert bot.intents == "default-intents"
-    assert FakeIntents.default_calls == 1
+    assert intents_calls == ["default"]
+    assert len(bot.listeners) == 1
+    assert bot.listeners[0][1] == "on_ready"
 
     asyncio.run(bot.setup_hook())
 
@@ -93,30 +103,50 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
 
 
 def test_create_bot_logs_ready_state_with_connected_user(
-    caplog: Any,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    fake_discord_module, _ = build_fake_discord_module()
+
+    def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
+        return None
+
+    async def fake_sync_commands(tree: Any, *, guild: Any) -> list[str]:
+        return ["ping"]
+
     bot = create_bot(
         build_config(),
-        discord_module=FakeDiscordModule,
+        discord_module=fake_discord_module,
         commands_module=FakeCommandsModule,
+        register_commands_func=fake_register_commands,
+        sync_commands_func=fake_sync_commands,
     )
     bot.user = FakeUser(9001)
 
     with caplog.at_level(logging.INFO):
-        asyncio.run(bot.on_ready())
+        asyncio.run(bot.listeners[0][0]())
 
     assert "Discord client ready as HiveBot (9001)" in caplog.text
 
 
-def test_create_bot_logs_ready_state_without_user(caplog: Any) -> None:
+def test_create_bot_logs_ready_state_without_user(caplog: pytest.LogCaptureFixture) -> None:
+    fake_discord_module, _ = build_fake_discord_module()
+
+    def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
+        return None
+
+    async def fake_sync_commands(tree: Any, *, guild: Any) -> list[str]:
+        return ["ping"]
+
     bot = create_bot(
         build_config(),
-        discord_module=FakeDiscordModule,
+        discord_module=fake_discord_module,
         commands_module=FakeCommandsModule,
+        register_commands_func=fake_register_commands,
+        sync_commands_func=fake_sync_commands,
     )
 
     with caplog.at_level(logging.INFO):
-        asyncio.run(bot.on_ready())
+        asyncio.run(bot.listeners[0][0]())
 
     assert "Discord client is ready" in caplog.text
 

@@ -57,5 +57,9 @@ def main(
         return 2
     if bot_runner is None:
         bot_runner = run_bot
-    bot_runner(config)
+    try:
+        bot_runner(config)
+    except Exception as exc:
+        print(f"Bot error: {exc}", file=sys.stderr)
+        return 1
     return 0

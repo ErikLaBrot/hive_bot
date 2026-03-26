@@ -79,6 +79,28 @@ def test_main_returns_error_for_invalid_config(
     assert "Configuration error: bad config: broken.toml" in capsys.readouterr().err
 
 
+def test_main_returns_error_for_bot_startup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = AppConfig(discord=DiscordConfig(token="token-value", guild_id=42))
+
+    def fake_bootstrap_application(config_path: Path) -> AppConfig:
+        return config
+
+    def fake_run_bot(received_config: AppConfig) -> None:
+        assert received_config == config
+        raise RuntimeError("bad token")
+
+    monkeypatch.setattr(app, "bootstrap_application", fake_bootstrap_application)
+    monkeypatch.setattr(app, "run_bot", fake_run_bot)
+
+    result = app.main(["--config", "config.local.toml"])
+
+    assert result == 1
+    assert "Bot error: bad token" in capsys.readouterr().err
+
+
 def test_module_entrypoint_invokes_main(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str] | None] = []
 

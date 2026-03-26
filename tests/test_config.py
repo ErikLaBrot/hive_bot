@@ -47,7 +47,10 @@ def test_load_config_uses_default_log_level_when_section_is_missing(tmp_path: Pa
 
 def test_load_config_strips_surrounding_whitespace_from_token(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text('[discord]\ntoken = "  token-value  "\nguild_id = 42\n', encoding="utf-8")
+    config_path.write_text(
+        '[discord]\ntoken = "  token-value  "\nguild_id = 42\n',
+        encoding="utf-8",
+    )
 
     config = load_config(config_path)
 
@@ -69,7 +72,10 @@ def test_load_config_raises_for_invalid_toml(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-def test_load_config_raises_for_other_read_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_load_config_raises_for_other_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.toml"
 
     def fake_read_text(self: Path, *, encoding: str) -> str:

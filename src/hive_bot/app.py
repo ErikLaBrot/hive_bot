@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from hive_bot.config import AppConfig, ConfigError, DEFAULT_CONFIG_PATH, load_config
+from hive_bot.config import DEFAULT_CONFIG_PATH, AppConfig, ConfigError, load_config
 from hive_bot.logging_config import configure_logging
 
 LOGGER = logging.getLogger(__name__)

@@ -5,8 +5,8 @@
 Issue `#1` establishes the runtime configuration, logging setup, and application
 startup entrypoint. Issue `#2` bootstraps the installable Python package and
 quality toolchain around that code. Issue `#3` adds the `/ping` slash command
-implementation in code. Issue `#4` adds guild-scoped slash-command registration
-infrastructure. Discord connectivity is completed in a later milestone issue.
+implementation. Issue `#4` adds guild-scoped slash-command registration
+infrastructure. Issue `#5` wires those pieces into a live Discord client.
 
 ## Setup
 
@@ -38,7 +38,7 @@ level = "INFO"
 
 ## Run
 
-Start the application bootstrap with either:
+Start the bot with either:
 
 ```bash
 python3 -m hive_bot --config config.local.toml
@@ -50,10 +50,9 @@ or:
 hive-bot --config config.local.toml
 ```
 
-The current milestone slice initializes configuration and logging, includes the
-`/ping` command implementation, and now includes guild-scoped command
-registration infrastructure. Discord client startup still comes in a later
-issue, so `/ping` is not yet reachable in a live Discord guild.
+Running the CLI now loads config, configures logging, starts the Discord
+client, registers the milestone commands, and syncs them to the configured
+guild during startup.
 
 ## Quality Checks
 
@@ -75,9 +74,16 @@ responds with exactly `pong`.
 Guild-scoped registration infrastructure is implemented in
 `src/hive_bot/command_registry.py`.
 
-When the Discord client startup issue lands, the bot will:
+When the bot connects successfully, it will:
 - register the milestone commands on its command tree
 - sync those commands to the configured target guild
+- log the connected bot identity for manual ready-state verification
 
-Manual Discord validation of `/ping` remains blocked on the later milestone
-issue that adds live Discord connectivity.
+## Manual Validation
+
+1. Create a bot application in the Discord developer portal and install it to
+   your target server with the `bot` and `applications.commands` scopes.
+2. Put the bot token and target guild ID into `config.local.toml`.
+3. Run `python3 -m hive_bot --config config.local.toml`.
+4. Verify the bot appears online and logs that it is ready.
+5. Verify `/ping` appears in the configured guild and responds with `pong`.

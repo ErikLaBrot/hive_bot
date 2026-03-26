@@ -44,17 +44,24 @@ def test_build_parser_uses_expected_default() -> None:
 
 def test_main_returns_zero_for_valid_config(monkeypatch: pytest.MonkeyPatch) -> None:
     received_paths: list[Path] = []
+    received_configs: list[AppConfig] = []
+    config = AppConfig(discord=DiscordConfig(token="token-value", guild_id=42))
 
     def fake_bootstrap_application(config_path: Path) -> AppConfig:
         received_paths.append(config_path)
-        return AppConfig(discord=DiscordConfig(token="token-value", guild_id=42))
+        return config
+
+    def fake_run_bot(received_config: AppConfig) -> None:
+        received_configs.append(received_config)
 
     monkeypatch.setattr(app, "bootstrap_application", fake_bootstrap_application)
+    monkeypatch.setattr(app, "run_bot", fake_run_bot)
 
     result = app.main(["--config", "custom.toml"])
 
     assert result == 0
     assert received_paths == [Path("custom.toml")]
+    assert received_configs == [config]
 
 
 def test_main_returns_error_for_invalid_config(

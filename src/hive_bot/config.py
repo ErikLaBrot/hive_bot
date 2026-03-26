@@ -73,7 +73,7 @@ def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, .
 
 def _require_positive_int(config_data: dict[str, object], path: tuple[str, ...]) -> int:
     value = _resolve_path(config_data, path)
-    if not isinstance(value, int) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         dotted_path = ".".join(path)
         raise ConfigError(f"{dotted_path} must be a positive integer")
     return value
@@ -107,4 +107,3 @@ def _resolve_path(config_data: dict[str, object], path: tuple[str, ...]) -> obje
             raise ConfigError(f"Missing required config value: {dotted_path}")
         value = value[part]
     return value
-

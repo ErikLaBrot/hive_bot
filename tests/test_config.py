@@ -80,6 +80,7 @@ def test_load_config_raises_for_empty_token(tmp_path: Path) -> None:
     ("guild_id", "expected_message"),
     [
         ("0", "discord.guild_id must be a positive integer"),
+        ("true", "discord.guild_id must be a positive integer"),
         ('"abc"', "discord.guild_id must be a positive integer"),
     ],
 )
@@ -145,4 +146,3 @@ def test_require_mapping_reraises_when_default_is_not_provided() -> None:
 def test_require_mapping_raises_when_value_is_not_a_table() -> None:
     with pytest.raises(ConfigError, match="logging must be a table"):
         _require_mapping({"logging": "INFO"}, ("logging",))
-

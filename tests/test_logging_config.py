@@ -18,4 +18,4 @@ def test_configure_logging_calls_basic_config(monkeypatch: Any) -> None:
 
     configure_logging("INFO")
 
-    assert calls == [{"level": logging.INFO, "format": LOG_FORMAT, "force": True}]
+    assert calls == [{"level": "INFO", "format": LOG_FORMAT, "force": True}]

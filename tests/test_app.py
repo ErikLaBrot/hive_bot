@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import runpy
-from typing import Any
+
+import pytest
 
 from hive_bot import app
 from hive_bot.config import AppConfig, ConfigError, DiscordConfig
@@ -41,7 +42,7 @@ def test_build_parser_uses_expected_default() -> None:
     assert parsed.config == Path("config.local.toml")
 
 
-def test_main_returns_zero_for_valid_config(monkeypatch: Any) -> None:
+def test_main_returns_zero_for_valid_config(monkeypatch: pytest.MonkeyPatch) -> None:
     received_argv: list[Path] = []
 
     def fake_bootstrap_application(config_path: Path) -> AppConfig:
@@ -56,7 +57,10 @@ def test_main_returns_zero_for_valid_config(monkeypatch: Any) -> None:
     assert received_argv == [Path("custom.toml")]
 
 
-def test_main_returns_error_for_invalid_config(monkeypatch: Any, capsys: Any) -> None:
+def test_main_returns_error_for_invalid_config(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     def fake_bootstrap_application(config_path: Path) -> AppConfig:
         raise ConfigError(f"bad config: {config_path}")
 
@@ -68,7 +72,7 @@ def test_main_returns_error_for_invalid_config(monkeypatch: Any, capsys: Any) ->
     assert "Configuration error: bad config: broken.toml" in capsys.readouterr().err
 
 
-def test_module_entrypoint_invokes_main(monkeypatch: Any) -> None:
+def test_module_entrypoint_invokes_main(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str] | None] = []
 
     def fake_main(argv: list[str] | None = None) -> int:
@@ -83,4 +87,3 @@ def test_module_entrypoint_invokes_main(monkeypatch: Any) -> None:
         assert exc.code == 0
 
     assert calls == [None]
-

@@ -1,0 +1,7 @@
+[discord]
+token = "replace-me"
+guild_id = 123456789012345678
+
+[logging]
+level = "INFO"
+

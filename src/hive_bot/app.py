@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from hive_bot.bot import run_bot
 from hive_bot.config import DEFAULT_CONFIG_PATH, AppConfig, ConfigError, load_config
 from hive_bot.logging_config import configure_logging
 
@@ -31,7 +32,7 @@ def bootstrap_application(
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for the application entrypoint."""
 
-    parser = argparse.ArgumentParser(description="Start the hive_bot application bootstrap.")
+    parser = argparse.ArgumentParser(description="Start the hive_bot Discord bot.")
     parser.add_argument(
         "--config",
         type=Path,
@@ -41,14 +42,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    bot_runner: Callable[[AppConfig], None] | None = None,
+) -> int:
     """Run the application entrypoint."""
 
     args = build_parser().parse_args(argv)
     try:
-        bootstrap_application(args.config)
+        config = bootstrap_application(args.config)
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
+    if bot_runner is None:
+        bot_runner = run_bot
+    try:
+        bot_runner(config)
+    except Exception as exc:
+        LOGGER.exception("Bot startup failed")
+        print(f"Bot error: {exc}", file=sys.stderr)
+        return 1
     return 0
-

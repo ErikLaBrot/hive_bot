@@ -42,6 +42,13 @@ class IdlessGuild:
         return "IdlessGuild()"
 
 
+class FailingCopyCommandTree(FakeCommandTree):
+    def copy_global_to(self, *, guild: Any) -> None:
+        self.call_order.append("copy")
+        self.copied_guilds.append(guild)
+        raise RuntimeError("copy failed")
+
+
 def test_register_commands_adds_ping_command(monkeypatch: pytest.MonkeyPatch) -> None:
     tree = FakeCommandTree()
     received_modules: list[Any] = []
@@ -87,18 +94,12 @@ def test_sync_commands_logs_guild_context_on_failure(caplog: pytest.LogCaptureFi
             asyncio.run(sync_commands(tree, guild=guild))
 
     assert tree.call_order == ["copy", "sync"]
-    assert "Failed to sync commands to guild 303" in caplog.text
+    assert "Failed to register commands to guild 303" in caplog.text
 
 
 def test_sync_commands_logs_guild_context_when_copy_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FailingCopyCommandTree(FakeCommandTree):
-        def copy_global_to(self, *, guild: Any) -> None:
-            self.call_order.append("copy")
-            self.copied_guilds.append(guild)
-            raise RuntimeError("copy failed")
-
     tree = FailingCopyCommandTree()
     guild = FakeGuild(404)
 
@@ -107,18 +108,12 @@ def test_sync_commands_logs_guild_context_when_copy_fails(
             asyncio.run(sync_commands(tree, guild=guild))
 
     assert tree.call_order == ["copy"]
-    assert "Failed to sync commands to guild 404" in caplog.text
+    assert "Failed to register commands to guild 404" in caplog.text
 
 
 def test_sync_commands_logs_safe_guild_identifier_when_id_is_missing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FailingCopyCommandTree(FakeCommandTree):
-        def copy_global_to(self, *, guild: Any) -> None:
-            self.call_order.append("copy")
-            self.copied_guilds.append(guild)
-            raise RuntimeError("copy failed")
-
     tree = FailingCopyCommandTree()
     guild = IdlessGuild()
 
@@ -127,4 +122,4 @@ def test_sync_commands_logs_safe_guild_identifier_when_id_is_missing(
             asyncio.run(sync_commands(tree, guild=guild))
 
     assert tree.call_order == ["copy"]
-    assert "Failed to sync commands to guild IdlessGuild()" in caplog.text
+    assert "Failed to register commands to guild IdlessGuild()" in caplog.text

@@ -60,6 +60,18 @@ def test_load_config_raises_for_invalid_toml(tmp_path: Path) -> None:
         load_config(config_path)
 
 
+def test_load_config_raises_for_other_read_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+
+    def fake_read_text(self: Path, *, encoding: str) -> str:
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    with pytest.raises(ConfigError, match="Could not read config file"):
+        load_config(config_path)
+
+
 def test_load_config_raises_for_missing_required_value(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("[discord]\nguild_id = 42\n", encoding="utf-8")

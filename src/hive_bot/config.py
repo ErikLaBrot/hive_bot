@@ -37,6 +37,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         config_data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"Config file does not exist: {path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Could not read config file: {path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Config file is not valid TOML: {path}") from exc
 

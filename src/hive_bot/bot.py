@@ -30,8 +30,8 @@ def create_bot(
         guild = discord_module.Object(id=config.discord.guild_id)
         await sync_commands_func(self.tree, guild=guild)
 
-    async def on_ready() -> None:
-        user = bot.user
+    async def on_ready(bot_instance: Any) -> None:
+        user = bot_instance.user
         if user is None:
             LOGGER.warning("Discord client ready event fired before bot user was available")
             return
@@ -47,7 +47,7 @@ def create_bot(
         command_prefix=commands_module.when_mentioned,
         intents=discord_module.Intents.default(),
     )
-    bot.add_listener(on_ready, "on_ready")
+    bot.add_listener(lambda: on_ready(bot), "on_ready")
     return bot
 
 
@@ -55,4 +55,5 @@ def run_bot(config: AppConfig, *, bot_factory: Callable[[AppConfig], Any] = crea
     """Start the Discord client with the configured token."""
 
     bot = bot_factory(config)
+    # Logging is configured centrally during application bootstrap.
     bot.run(config.discord.token, log_handler=None)

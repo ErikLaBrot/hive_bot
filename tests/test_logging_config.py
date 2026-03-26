@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import pytest
+
 from hive_bot.logging_config import LOG_FORMAT, configure_logging
 
 
-def test_configure_logging_calls_basic_config(monkeypatch: Any) -> None:
+def test_configure_logging_calls_basic_config(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
     def fake_basic_config(**kwargs: Any) -> None:

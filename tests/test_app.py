@@ -81,9 +81,9 @@ def test_module_entrypoint_invokes_main(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(app, "main", fake_main)
 
-    try:
+    with pytest.raises(SystemExit) as exc_info:
         runpy.run_module("hive_bot", run_name="__main__")
-    except SystemExit as exc:
-        assert exc.code == 0
+
+    assert exc_info.value.code == 0
 
     assert calls == [None]

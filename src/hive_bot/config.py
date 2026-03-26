@@ -67,13 +67,12 @@ def _read_log_level(config_data: dict[str, object]) -> str:
 
 def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, ...]) -> str:
     value = _resolve_path(config_data, path)
+    dotted_path = ".".join(path)
     if not isinstance(value, str):
-        dotted_path = ".".join(path)
         raise ConfigError(f"{dotted_path} must be a non-empty string")
 
     normalized_value = value.strip()
     if not normalized_value:
-        dotted_path = ".".join(path)
         raise ConfigError(f"{dotted_path} must be a non-empty string")
 
     return normalized_value

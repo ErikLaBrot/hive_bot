@@ -19,12 +19,14 @@ def register_commands(tree: Any, *, app_commands_module: Any) -> None:
 async def sync_commands(tree: Any, *, guild: Any) -> list[Any]:
     """Copy global commands into the target guild and sync them."""
 
+    guild_identifier = getattr(guild, "id", repr(guild))
+
     try:
         tree.copy_global_to(guild=guild)
         synced_commands = cast(list[Any], await tree.sync(guild=guild))
     except Exception:
-        LOGGER.exception("Failed to sync commands to guild %s", guild.id)
+        LOGGER.exception("Failed to sync commands to guild %s", guild_identifier)
         raise
 
-    LOGGER.info("Synced %s commands to guild %s", len(synced_commands), guild.id)
+    LOGGER.info("Synced %s commands to guild %s", len(synced_commands), guild_identifier)
     return synced_commands

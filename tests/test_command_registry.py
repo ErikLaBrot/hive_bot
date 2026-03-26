@@ -83,3 +83,23 @@ def test_sync_commands_logs_guild_context_on_failure(caplog: pytest.LogCaptureFi
 
     assert tree.call_order == ["copy", "sync"]
     assert "Failed to sync commands to guild 303" in caplog.text
+
+
+def test_sync_commands_logs_guild_context_when_copy_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingCopyCommandTree(FakeCommandTree):
+        def copy_global_to(self, *, guild: Any) -> None:
+            self.call_order.append("copy")
+            self.copied_guilds.append(guild)
+            raise RuntimeError("copy failed")
+
+    tree = FailingCopyCommandTree()
+    guild = FakeGuild(404)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="copy failed"):
+            asyncio.run(sync_commands(tree, guild=guild))
+
+    assert tree.call_order == ["copy"]
+    assert "Failed to sync commands to guild 404" in caplog.text

@@ -6,12 +6,15 @@ import asyncio
 import logging
 from typing import Any
 
+import pytest
+
 from hive_bot.command_registry import register_commands, sync_commands
 
 
 class FakeCommandTree:
     def __init__(self) -> None:
         self.added_commands: list[tuple[Any, bool]] = []
+        self.call_order: list[str] = []
         self.copied_guilds: list[Any] = []
         self.synced_guilds: list[Any] = []
         self.sync_result: list[Any] = ["ping"]
@@ -20,9 +23,11 @@ class FakeCommandTree:
         self.added_commands.append((command, override))
 
     def copy_global_to(self, *, guild: Any) -> None:
+        self.call_order.append("copy")
         self.copied_guilds.append(guild)
 
     async def sync(self, *, guild: Any) -> list[Any]:
+        self.call_order.append("sync")
         self.synced_guilds.append(guild)
         return self.sync_result
 
@@ -32,7 +37,7 @@ class FakeGuild:
         self.id = guild_id
 
 
-def test_register_commands_adds_ping_command(monkeypatch: Any) -> None:
+def test_register_commands_adds_ping_command(monkeypatch: pytest.MonkeyPatch) -> None:
     tree = FakeCommandTree()
     received_modules: list[Any] = []
 
@@ -48,7 +53,7 @@ def test_register_commands_adds_ping_command(monkeypatch: Any) -> None:
     assert tree.added_commands == [("ping-command", True)]
 
 
-def test_sync_commands_copies_globals_and_syncs(caplog: Any) -> None:
+def test_sync_commands_copies_globals_and_syncs(caplog: pytest.LogCaptureFixture) -> None:
     tree = FakeCommandTree()
     guild = FakeGuild(202)
 
@@ -56,6 +61,25 @@ def test_sync_commands_copies_globals_and_syncs(caplog: Any) -> None:
         synced_commands = asyncio.run(sync_commands(tree, guild=guild))
 
     assert synced_commands == ["ping"]
+    assert tree.call_order == ["copy", "sync"]
     assert tree.copied_guilds == [guild]
     assert tree.synced_guilds == [guild]
     assert "Synced 1 commands to guild 202" in caplog.text
+
+
+def test_sync_commands_logs_guild_context_on_failure(caplog: pytest.LogCaptureFixture) -> None:
+    class FailingCommandTree(FakeCommandTree):
+        async def sync(self, *, guild: Any) -> list[Any]:
+            self.call_order.append("sync")
+            self.synced_guilds.append(guild)
+            raise RuntimeError("sync failed")
+
+    tree = FailingCommandTree()
+    guild = FakeGuild(303)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="sync failed"):
+            asyncio.run(sync_commands(tree, guild=guild))
+
+    assert tree.call_order == ["copy", "sync"]
+    assert "Failed to sync commands to guild 303" in caplog.text

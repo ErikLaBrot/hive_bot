@@ -20,6 +20,11 @@ async def sync_commands(tree: Any, *, guild: Any) -> list[Any]:
     """Copy global commands into the target guild and sync them."""
 
     tree.copy_global_to(guild=guild)
-    synced_commands = cast(list[Any], await tree.sync(guild=guild))
+    try:
+        synced_commands = cast(list[Any], await tree.sync(guild=guild))
+    except Exception:
+        LOGGER.exception("Failed to sync commands to guild %s", guild.id)
+        raise
+
     LOGGER.info("Synced %s commands to guild %s", len(synced_commands), guild.id)
     return synced_commands

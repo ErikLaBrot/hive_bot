@@ -60,6 +60,7 @@ def main(
     try:
         bot_runner(config)
     except Exception as exc:
+        LOGGER.exception("Bot startup failed")
         print(f"Bot error: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import discord
 from discord.ext import commands
@@ -25,25 +25,28 @@ def create_bot(
 ) -> Any:
     """Construct the Discord bot and attach milestone startup hooks."""
 
-    bot = commands_module.Bot(
-        command_prefix=commands_module.when_mentioned,
-        intents=discord_module.Intents.default(),
-    )
-
-    async def setup_hook() -> None:
-        register_commands_func(bot.tree, app_commands_module=discord_module.app_commands)
+    async def setup_hook(self: Any) -> None:
+        register_commands_func(self.tree, app_commands_module=discord_module.app_commands)
         guild = discord_module.Object(id=config.discord.guild_id)
-        await sync_commands_func(bot.tree, guild=guild)
+        await sync_commands_func(self.tree, guild=guild)
 
     async def on_ready() -> None:
         user = bot.user
         if user is None:
-            LOGGER.info("Discord client is ready")
+            LOGGER.warning("Discord client ready event fired before bot user was available")
             return
 
         LOGGER.info("Discord client ready as %s (%s)", user, user.id)
 
-    bot.setup_hook = setup_hook
+    hive_bot_class = cast(
+        type[Any],
+        type("HiveBot", (commands_module.Bot,), {"setup_hook": setup_hook}),
+    )
+
+    bot = hive_bot_class(
+        command_prefix=commands_module.when_mentioned,
+        intents=discord_module.Intents.default(),
+    )
     bot.add_listener(on_ready, "on_ready")
     return bot
 

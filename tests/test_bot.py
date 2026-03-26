@@ -145,10 +145,10 @@ def test_create_bot_logs_ready_state_without_user(caplog: pytest.LogCaptureFixtu
         sync_commands_func=fake_sync_commands,
     )
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.WARNING):
         asyncio.run(bot.listeners[0][0]())
 
-    assert "Discord client is ready" in caplog.text
+    assert "Discord client ready event fired before bot user was available" in caplog.text
 
 
 def test_run_bot_starts_client_with_configured_token() -> None:

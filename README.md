@@ -5,8 +5,8 @@
 Issue `#1` establishes the runtime configuration, logging setup, and application
 startup entrypoint. Issue `#2` bootstraps the installable Python package and
 quality toolchain around that code. Issue `#3` adds the `/ping` slash command
-implementation in code. Discord connectivity and command registration are
-completed in later milestone issues.
+implementation in code. Issue `#4` adds guild-scoped slash-command registration
+infrastructure. Discord connectivity is completed in a later milestone issue.
 
 ## Setup
 
@@ -50,10 +50,10 @@ or:
 hive-bot --config config.local.toml
 ```
 
-The current milestone slice initializes configuration and logging, and the code
-now includes the `/ping` command implementation. Discord login and command
-registration still come in later issues, so `/ping` is not yet reachable in a
-live Discord guild.
+The current milestone slice initializes configuration and logging, includes the
+`/ping` command implementation, and now includes guild-scoped command
+registration infrastructure. Discord client startup still comes in a later
+issue, so `/ping` is not yet reachable in a live Discord guild.
 
 ## Quality Checks
 
@@ -70,5 +70,14 @@ pytest
 The `/ping` slash command is implemented in `src/hive_bot/commands/ping.py` and
 responds with exactly `pong`.
 
+## Command Registration
+
+Guild-scoped registration infrastructure is implemented in
+`src/hive_bot/command_registry.py`.
+
+When the Discord client startup issue lands, the bot will:
+- register the milestone commands on its command tree
+- sync those commands to the configured target guild
+
 Manual Discord validation of `/ping` remains blocked on the later milestone
-issues that add Discord connectivity and slash-command registration.
+issue that adds live Discord connectivity.

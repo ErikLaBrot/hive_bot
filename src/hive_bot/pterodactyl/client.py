@@ -43,6 +43,11 @@ class AsyncServerApi(Protocol):
     async def get_server_utilization(self, server_id: str, detail: bool = False) -> dict[str, Any]:
         """Fetch resource utilization for a single server."""
 
+    async def send_power_action(self, server_id: str, signal: str) -> object:
+        """Send a power signal to a single server."""
+
+    async def get_websocket(self, server_id: str) -> dict[str, Any]:
+        """Return websocket connection metadata for one server."""
 
 class AsyncClientApi(Protocol):
     """Subset of the py-dactyl client namespace used by the bridge."""

@@ -48,6 +48,9 @@ def create_bot(
 
         LOGGER.info("Discord client ready as %s (%s)", user, user.id)
 
+    async def ready_listener() -> None:
+        await on_ready(bot)
+
     hive_bot_class = cast(
         type[Any],
         type("HiveBot", (commands_module.Bot,), {"setup_hook": setup_hook}),
@@ -57,7 +60,7 @@ def create_bot(
         command_prefix=commands_module.when_mentioned,
         intents=discord_module.Intents.default(),
     )
-    bot.add_listener(lambda: on_ready(bot), "on_ready")
+    bot.add_listener(ready_listener, "on_ready")
     return bot
 
 

@@ -80,7 +80,99 @@ class BudgetStatus:
     missing_memory_limit_servers: tuple[DiscoveredServer, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ServerActionAccepted:
+    """A power action request was accepted for a resolved server."""
+
+    action: str
+    query: str
+    server: DiscoveredServer
+
+
+@dataclass(frozen=True, slots=True)
+class ServerActionNoOp:
+    """A power action resolved cleanly but did not need to change state."""
+
+    action: str
+    query: str
+    server: DiscoveredServer
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorSuccess:
+    """A previously accepted power action reached its terminal success state."""
+
+    action: str
+    server: DiscoveredServer
+    final_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorTimeout:
+    """Completion monitoring timed out before the terminal state was confirmed."""
+
+    action: str
+    server: DiscoveredServer
+    timeout_kind: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorUnconfirmed:
+    """Completion could not be confirmed, but the original action was accepted."""
+
+    action: str
+    server: DiscoveredServer
+    reason: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorError:
+    """Unexpected monitoring failure after an accepted power action."""
+
+    action: str
+    server: DiscoveredServer
+    reason: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ServerActionDenied:
+    """A power action was denied after validation or policy checks.
+
+    Some fields are reason-specific. Callers must populate the fields required
+    by the chosen `reason`, and formatters should assert those invariants
+    rather than silently rendering `None`.
+    """
+
+    action: str
+    query: str
+    reason: str
+    server: DiscoveredServer | None = None
+    running_server_count: int | None = None
+    max_running_servers: int | None = None
+    required_memory_mib: int | None = None
+    remaining_memory_mib: int | None = None
+    missing_memory_limit_servers: tuple[DiscoveredServer, ...] = ()
+
+
 type DiscoverServersResult = DiscoveredServers | PanelUnavailable
 type ResolveServerResult = ResolvedServer | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
 type ServerStatusResult = ServerStatus | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
 type BudgetResult = BudgetStatus | PanelUnavailable
+type ActionResult = (
+    ServerActionAccepted
+    | ServerActionNoOp
+    | ServerActionDenied
+    | ServerNotFound
+    | AmbiguousServerMatch
+    | PanelUnavailable
+)
+type ActionMonitorResult = (
+    ActionMonitorSuccess
+    | ActionMonitorTimeout
+    | ActionMonitorUnconfirmed
+    | ActionMonitorError
+)

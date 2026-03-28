@@ -64,7 +64,11 @@ class ServerStatus:
 
 @dataclass(frozen=True, slots=True)
 class BudgetStatus:
-    """Current policy budget summary based on live discovery."""
+    """Current policy budget summary based on live discovery.
+
+    `remaining_memory_mib` is signed. Negative values indicate the currently
+    running discovered servers already exceed the configured RAM ceiling.
+    """
 
     max_running_servers: int
     max_total_ram_gb: int

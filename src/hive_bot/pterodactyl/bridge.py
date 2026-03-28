@@ -76,10 +76,15 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 discovered_servers = await self._discover_servers_in_session(client)
-                resolve_result = _resolve_from_servers(query, discovered_servers)
-                if not isinstance(resolve_result, ResolvedServer):
-                    return resolve_result
+        except Exception as exc:
+            return self._panel_unavailable("get server status", exc)
 
+        resolve_result = _resolve_from_servers(query, discovered_servers)
+        if not isinstance(resolve_result, ResolvedServer):
+            return resolve_result
+
+        try:
+            async with self._open_client() as client:
                 utilization = await client.client.servers.get_server_utilization(
                     resolve_result.server.identifier
                 )
@@ -111,6 +116,7 @@ class PterodactylBridge:
             else None
         )
         remaining_memory_mib = (
+            # Keep this signed so callers can report exact over-budget amounts.
             self._policy.max_total_ram_mib - consumed_memory_mib
             if consumed_memory_mib is not None
             else None
@@ -143,6 +149,8 @@ class PterodactylBridge:
     ) -> list[dict[str, Any]]:
         response = await client.client.servers.list_servers(params={"per_page": 100})
         if isinstance(response, list):
+            # Older/compat py-dactyl responses may already be flattened to a
+            # single page list, so we cannot paginate further from here.
             if len(response) >= 100:
                 self._logger.warning(
                     "Received %s servers from a plain-list py-dactyl response; "

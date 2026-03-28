@@ -424,6 +424,18 @@ def test_get_server_status_returns_panel_unavailable_for_unexpected_errors(
     assert "Unexpected bridge failure while trying to get server status" in caplog.text
 
 
+def test_get_server_status_returns_panel_unavailable_when_discovery_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge = build_bridge(list_result=PterodactylApiError("panel down"))
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(bridge.get_server_status("alpha"))
+
+    assert result == PanelUnavailable(operation="get server status")
+    assert "Pterodactyl panel unavailable while trying to get server status" in caplog.text
+
+
 def test_get_budget_status_returns_complete_budget_summary() -> None:
     bridge = build_bridge(
         list_result=[
@@ -492,6 +504,31 @@ def test_get_budget_status_marks_missing_memory_data_as_partial() -> None:
     assert tuple(server.identifier for server in result.missing_memory_limit_servers) == (
         "gamma-1",
     )
+
+
+def test_get_budget_status_keeps_negative_remaining_memory_when_over_budget() -> None:
+    bridge = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=8192,
+            ),
+            discovered_item(
+                name="Gamma",
+                identifier="gamma-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+        ]
+    )
+
+    result = asyncio.run(bridge.get_budget_status())
+
+    assert isinstance(result, BudgetStatus)
+    assert result.consumed_memory_mib == 12288
+    assert result.remaining_memory_mib == -2048
 
 
 def test_resolve_server_returns_panel_unavailable_when_discovery_fails() -> None:

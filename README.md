@@ -7,6 +7,8 @@ startup entrypoint. Issue `#2` bootstraps the installable Python package and
 quality toolchain around that code. Issue `#3` adds the `/ping` slash command
 implementation. Issue `#4` adds guild-scoped slash-command registration
 infrastructure. Issue `#5` wires those pieces into a live Discord client.
+Issue `#13` adds the Pterodactyl configuration and bridge foundation that later
+milestone work will use for discovery-first server management.
 
 ## Setup
 
@@ -23,7 +25,8 @@ test tools used in this repository.
 ## Configuration
 
 1. Copy `config.example.toml` to `config.local.toml`.
-2. Fill in the Discord bot token and target guild ID.
+2. Fill in the Discord bot token, target guild ID, Pterodactyl panel URL, API
+   key, and policy limits.
 
 Example:
 
@@ -32,9 +35,20 @@ Example:
 token = "replace-me"
 guild_id = 123456789012345678
 
+[pterodactyl]
+panel_url = "https://panel.example.com"
+api_key = "replace-me"
+
+[policy]
+max_running_servers = 2
+max_total_ram_gb = 10
+
 [logging]
 level = "INFO"
 ```
+
+The Pterodactyl sections are discovery and policy only. The bot does not keep a
+static local registry of server names or IDs for this milestone.
 
 ## Run
 
@@ -53,6 +67,20 @@ hive-bot --config config.local.toml
 Running the CLI now loads config, configures logging, starts the Discord
 client, registers the milestone commands, and syncs them to the configured
 guild during startup.
+
+## Pterodactyl Foundation
+
+Issue `#13` introduces a shared bridge in `src/hive_bot/pterodactyl/` that uses
+`py-dactyl` and fresh panel discovery as the source of truth. The bridge now
+supports:
+
+- live server discovery
+- exact server resolution by name or identifier
+- current status lookup
+- policy budget summaries based on discovered RAM limits
+
+If the panel is unreachable or memory data is incomplete, the bridge returns
+structured safe results instead of leaking raw API exceptions.
 
 ## Quality Checks
 

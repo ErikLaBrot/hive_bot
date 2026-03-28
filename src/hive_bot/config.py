@@ -23,10 +23,34 @@ class DiscordConfig:
 
 
 @dataclass(frozen=True)
+class PterodactylConfig:
+    """Pterodactyl client runtime settings."""
+
+    panel_url: str
+    api_key: str
+
+
+@dataclass(frozen=True)
+class PolicyConfig:
+    """Policy limits for server management commands."""
+
+    max_running_servers: int
+    max_total_ram_gb: int
+
+    @property
+    def max_total_ram_mib(self) -> int:
+        """Return the configured RAM ceiling converted to MiB."""
+
+        return self.max_total_ram_gb * 1024
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Top-level runtime settings."""
 
     discord: DiscordConfig
+    pterodactyl: PterodactylConfig
+    policy: PolicyConfig
     log_level: str = "INFO"
 
 
@@ -46,6 +70,17 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         discord=DiscordConfig(
             token=_require_non_empty_string(config_data, ("discord", "token")),
             guild_id=_require_positive_int(config_data, ("discord", "guild_id")),
+        ),
+        pterodactyl=PterodactylConfig(
+            panel_url=_require_non_empty_string(config_data, ("pterodactyl", "panel_url")),
+            api_key=_require_non_empty_string(config_data, ("pterodactyl", "api_key")),
+        ),
+        policy=PolicyConfig(
+            max_running_servers=_require_positive_int(
+                config_data,
+                ("policy", "max_running_servers"),
+            ),
+            max_total_ram_gb=_require_positive_int(config_data, ("policy", "max_total_ram_gb")),
         ),
         log_level=_read_log_level(config_data),
     )

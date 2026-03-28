@@ -1,0 +1,255 @@
+"""Discovery-first bridge for the Pterodactyl client API."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import aiohttp
+from pydactyl.exceptions import PydactylError  # type: ignore[import-untyped]
+
+from hive_bot.config import PolicyConfig, PterodactylConfig
+from hive_bot.pterodactyl.client import (
+    AsyncPterodactylClientProtocol,
+    ClientContextManager,
+    ClientFactory,
+    create_client,
+)
+from hive_bot.pterodactyl.models import (
+    AmbiguousServerMatch,
+    BudgetResult,
+    BudgetStatus,
+    DiscoveredServer,
+    DiscoveredServers,
+    DiscoverServersResult,
+    PanelUnavailable,
+    ResolvedServer,
+    ResolveServerResult,
+    ServerNotFound,
+    ServerStatus,
+    ServerStatusResult,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+class PterodactylBridge:
+    """Encapsulate discovery-first access to Pterodactyl."""
+
+    def __init__(
+        self,
+        config: PterodactylConfig,
+        policy: PolicyConfig,
+        *,
+        client_factory: ClientFactory = create_client,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._config = config
+        self._policy = policy
+        self._client_factory = client_factory
+        self._logger = LOGGER if logger is None else logger
+
+    async def discover_servers(self) -> DiscoverServersResult:
+        """Return the servers currently discoverable by the client key."""
+
+        try:
+            async with self._open_client() as client:
+                raw_items = await self._list_server_items(client)
+        except Exception as exc:
+            return self._panel_unavailable("discover servers", exc)
+
+        servers = tuple(
+            sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key)
+        )
+        return DiscoveredServers(servers=servers)
+
+    async def resolve_server(self, query: str) -> ResolveServerResult:
+        """Resolve a server by exact case-insensitive name or identifier."""
+
+        discovered_result = await self.discover_servers()
+        if isinstance(discovered_result, PanelUnavailable):
+            return discovered_result
+
+        return _resolve_from_servers(query, discovered_result.servers)
+
+    async def get_server_status(self, query: str) -> ServerStatusResult:
+        """Return current server status for a resolved server."""
+
+        try:
+            async with self._open_client() as client:
+                raw_items = await self._list_server_items(client)
+                discovered_servers = tuple(
+                    sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key)
+                )
+                resolve_result = _resolve_from_servers(query, discovered_servers)
+                if not isinstance(resolve_result, ResolvedServer):
+                    return resolve_result
+
+                utilization = await client.client.servers.get_server_utilization(
+                    resolve_result.server.identifier
+                )
+        except Exception as exc:
+            return self._panel_unavailable("get server status", exc)
+
+        current_state = _read_optional_string(_coerce_attributes(utilization).get("current_state"))
+        return ServerStatus(
+            server=_replace_server_state(resolve_result.server, current_state=current_state),
+        )
+
+    async def get_budget_status(self) -> BudgetResult:
+        """Compute current policy budget information from live discovery."""
+
+        discovered_result = await self.discover_servers()
+        if isinstance(discovered_result, PanelUnavailable):
+            return discovered_result
+
+        running_servers = tuple(
+            server for server in discovered_result.servers if _is_running_state(server.state)
+        )
+        missing_memory_servers = tuple(
+            server for server in running_servers if server.memory_limit_mib is None
+        )
+        has_complete_memory_data = not missing_memory_servers
+        consumed_memory_mib = (
+            sum(server.memory_limit_mib or 0 for server in running_servers)
+            if has_complete_memory_data
+            else None
+        )
+        remaining_memory_mib = (
+            self._policy.max_total_ram_mib - consumed_memory_mib
+            if consumed_memory_mib is not None
+            else None
+        )
+
+        return BudgetStatus(
+            max_running_servers=self._policy.max_running_servers,
+            max_total_ram_gb=self._policy.max_total_ram_gb,
+            running_server_count=len(running_servers),
+            running_servers=running_servers,
+            consumed_memory_mib=consumed_memory_mib,
+            remaining_memory_mib=remaining_memory_mib,
+            has_complete_memory_data=has_complete_memory_data,
+            missing_memory_limit_servers=missing_memory_servers,
+        )
+
+    def _open_client(self) -> ClientContextManager:
+        return self._client_factory(self._config)
+
+    async def _list_server_items(
+        self,
+        client: AsyncPterodactylClientProtocol,
+    ) -> list[dict[str, Any]]:
+        response = await client.client.servers.list_servers(params={"per_page": 100})
+        if isinstance(response, list):
+            return response
+
+        return await response.collect_async()
+
+    def _parse_server(self, payload: dict[str, Any]) -> DiscoveredServer:
+        attributes = _coerce_attributes(payload)
+        return DiscoveredServer(
+            name=_read_required_string(attributes.get("name"), fallback="unknown"),
+            identifier=_read_required_string(
+                attributes.get("identifier"),
+                fallback="unknown",
+            ),
+            uuid=_read_optional_string(attributes.get("uuid")),
+            internal_id=_read_optional_int(attributes.get("internal_id")),
+            state=_read_optional_string(attributes.get("current_state")),
+            memory_limit_mib=_read_memory_limit(attributes),
+        )
+
+    def _panel_unavailable(self, operation: str, exc: Exception) -> PanelUnavailable:
+        if isinstance(exc, (aiohttp.ClientError, PydactylError, TimeoutError)):
+            self._logger.warning(
+                "Pterodactyl panel unavailable while trying to %s: %s",
+                operation,
+                exc,
+            )
+        else:
+            self._logger.exception("Unexpected bridge failure while trying to %s", operation)
+        return PanelUnavailable(operation=operation)
+
+
+def _resolve_from_servers(query: str, servers: tuple[DiscoveredServer, ...]) -> ResolveServerResult:
+    normalized_query = query.strip().casefold()
+    if not normalized_query:
+        return ServerNotFound(query=query)
+
+    matches = tuple(server for server in servers if _matches_query(server, normalized_query))
+    if not matches:
+        return ServerNotFound(query=query)
+    if len(matches) > 1:
+        return AmbiguousServerMatch(query=query, matches=matches)
+    return ResolvedServer(query=query, server=matches[0])
+
+
+def _matches_query(server: DiscoveredServer, normalized_query: str) -> bool:
+    return (
+        server.name.casefold() == normalized_query
+        or server.identifier.casefold() == normalized_query
+    )
+
+
+def _coerce_attributes(payload: dict[str, Any]) -> dict[str, Any]:
+    attributes = payload.get("attributes")
+    if isinstance(attributes, dict):
+        return attributes
+    return payload
+
+
+def _read_required_string(value: object, *, fallback: str) -> str:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized:
+            return normalized
+    return fallback
+
+
+def _read_optional_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _read_optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _read_memory_limit(attributes: dict[str, Any]) -> int | None:
+    limits = attributes.get("limits")
+    if not isinstance(limits, dict):
+        return None
+
+    memory_limit = limits.get("memory")
+    if isinstance(memory_limit, bool) or not isinstance(memory_limit, int):
+        return None
+    if memory_limit <= 0:
+        return None
+    return memory_limit
+
+
+def _replace_server_state(
+    server: DiscoveredServer,
+    *,
+    current_state: str | None,
+) -> DiscoveredServer:
+    return DiscoveredServer(
+        name=server.name,
+        identifier=server.identifier,
+        uuid=server.uuid,
+        internal_id=server.internal_id,
+        state=current_state if current_state is not None else server.state,
+        memory_limit_mib=server.memory_limit_mib,
+    )
+
+
+def _server_sort_key(server: DiscoveredServer) -> tuple[str, str]:
+    return (server.name.casefold(), server.identifier.casefold())
+
+
+def _is_running_state(state: str | None) -> bool:
+    return state is not None and state.casefold() == "running"

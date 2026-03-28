@@ -75,16 +75,15 @@ class PterodactylBridge:
 
         try:
             async with self._open_client() as client:
-                discovered_servers = await self._discover_servers_in_session(client)
-        except Exception as exc:
-            return self._panel_unavailable("get server status", exc)
+                try:
+                    discovered_servers = await self._discover_servers_in_session(client)
+                except Exception as exc:
+                    return self._panel_unavailable("discover servers", exc)
 
-        resolve_result = _resolve_from_servers(query, discovered_servers)
-        if not isinstance(resolve_result, ResolvedServer):
-            return resolve_result
+                resolve_result = _resolve_from_servers(query, discovered_servers)
+                if not isinstance(resolve_result, ResolvedServer):
+                    return resolve_result
 
-        try:
-            async with self._open_client() as client:
                 utilization = await client.client.servers.get_server_utilization(
                     resolve_result.server.identifier
                 )
@@ -150,7 +149,7 @@ class PterodactylBridge:
         response = await client.client.servers.list_servers(params={"per_page": 100})
         if isinstance(response, list):
             # Older/compat py-dactyl responses may already be flattened to a
-            # single page list, so we cannot paginate further from here.
+            # single page list, so this warning is only about that shim path.
             if len(response) >= 100:
                 self._logger.warning(
                     "Received %s servers from a plain-list py-dactyl response; "
@@ -176,6 +175,12 @@ class PterodactylBridge:
         )
 
     def _panel_unavailable(self, operation: str, exc: Exception) -> PanelUnavailable:
+        """Log and convert a caught exception into a user-safe unavailable result.
+
+        This helper is intended to be called from inside an ``except`` block so
+        ``logger.exception`` retains the active traceback for unexpected errors.
+        """
+
         if isinstance(exc, (aiohttp.ClientError, PydactylError, TimeoutError)):
             self._logger.warning(
                 "Pterodactyl panel unavailable while trying to %s: %s",

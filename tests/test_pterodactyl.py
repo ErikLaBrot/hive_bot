@@ -432,8 +432,8 @@ def test_get_server_status_returns_panel_unavailable_when_discovery_fails(
     with caplog.at_level(logging.WARNING):
         result = asyncio.run(bridge.get_server_status("alpha"))
 
-    assert result == PanelUnavailable(operation="get server status")
-    assert "Pterodactyl panel unavailable while trying to get server status" in caplog.text
+    assert result == PanelUnavailable(operation="discover servers")
+    assert "Pterodactyl panel unavailable while trying to discover servers" in caplog.text
 
 
 def test_get_budget_status_returns_complete_budget_summary() -> None:
@@ -529,6 +529,47 @@ def test_get_budget_status_keeps_negative_remaining_memory_when_over_budget() ->
     assert isinstance(result, BudgetStatus)
     assert result.consumed_memory_mib == 12288
     assert result.remaining_memory_mib == -2048
+
+
+def test_get_server_status_reuses_one_client_session() -> None:
+    servers_api = FakeServersApi(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            )
+        ],
+        utilization_by_identifier={"alpha-1": {"current_state": "running"}},
+    )
+    opened_clients: list[FakeClientContext] = []
+
+    def fake_client_factory(
+        config: PterodactylConfig,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> FakeClientContext:
+        del logger
+        assert config == PterodactylConfig(
+            panel_url="https://panel.example.com",
+            api_key="ptlc_test",
+        )
+        client = FakeClientContext(servers_api)
+        opened_clients.append(client)
+        return client
+
+    bridge = PterodactylBridge(
+        PterodactylConfig(panel_url="https://panel.example.com", api_key="ptlc_test"),
+        PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+        client_factory=fake_client_factory,
+    )
+
+    result = asyncio.run(bridge.get_server_status("alpha"))
+
+    assert isinstance(result, ServerStatus)
+    assert result.server.state == "running"
+    assert len(opened_clients) == 1
 
 
 def test_resolve_server_returns_panel_unavailable_when_discovery_fails() -> None:

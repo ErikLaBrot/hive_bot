@@ -79,7 +79,7 @@ def test_load_config_strips_surrounding_whitespace_from_token(tmp_path: Path) ->
             'token = "  token-value  "\n'
             "guild_id = 42\n\n"
             "[pterodactyl]\n"
-            'panel_url = " https://panel.example.com "\n'
+            'panel_url = " https://panel.example.com/ "\n'
             'api_key = "  ptlc_test  "\n\n'
             "[policy]\n"
             "max_running_servers = 2\n"

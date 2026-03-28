@@ -118,7 +118,7 @@ def _require_http_url(config_data: dict[str, object], path: tuple[str, ...]) -> 
     dotted_path = ".".join(path)
     if not value.startswith(("http://", "https://")):
         raise ConfigError(f"{dotted_path} must start with http:// or https://")
-    return value
+    return value.rstrip("/")
 
 
 def _require_positive_int(config_data: dict[str, object], path: tuple[str, ...]) -> int:

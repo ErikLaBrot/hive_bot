@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from hive_bot.command_registry import register_commands, sync_commands
 from hive_bot.config import AppConfig
+from hive_bot.pterodactyl import PterodactylBridge
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,11 +23,18 @@ def create_bot(
     commands_module: Any = commands,
     register_commands_func: Callable[..., None] = register_commands,
     sync_commands_func: Callable[..., Any] = sync_commands,
+    pterodactyl_bridge_factory: Callable[..., Any] = PterodactylBridge,
 ) -> Any:
     """Construct the Discord bot and attach milestone startup hooks."""
 
+    pterodactyl_bridge = pterodactyl_bridge_factory(config.pterodactyl, config.policy)
+
     async def setup_hook(self: Any) -> None:
-        register_commands_func(self.tree, app_commands_module=discord_module.app_commands)
+        register_commands_func(
+            self.tree,
+            app_commands_module=discord_module.app_commands,
+            pterodactyl_bridge=pterodactyl_bridge,
+        )
         guild = discord_module.Object(id=config.discord.guild_id)
         await sync_commands_func(self.tree, guild=guild)
 

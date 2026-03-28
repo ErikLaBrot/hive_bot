@@ -76,16 +76,27 @@ def build_fake_discord_module(*, default_intents: str = "default-intents") -> tu
 
 
 def test_create_bot_builds_discord_bot_with_default_intents() -> None:
-    register_calls: list[tuple[Any, Any]] = []
+    register_calls: list[tuple[Any, Any, Any]] = []
     sync_calls: list[tuple[Any, Any]] = []
+    bridge_factory_calls: list[tuple[Any, Any]] = []
     fake_discord_module, intents_calls = build_fake_discord_module()
+    fake_bridge = object()
 
-    def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
-        register_calls.append((tree, app_commands_module))
+    def fake_register_commands(
+        tree: Any,
+        *,
+        app_commands_module: Any,
+        pterodactyl_bridge: Any,
+    ) -> None:
+        register_calls.append((tree, app_commands_module, pterodactyl_bridge))
 
     async def fake_sync_commands(tree: Any, *, guild: Any) -> list[str]:
         sync_calls.append((tree, guild))
         return ["ping"]
+
+    def fake_bridge_factory(pterodactyl_config: Any, policy: Any) -> Any:
+        bridge_factory_calls.append((pterodactyl_config, policy))
+        return fake_bridge
 
     bot = create_bot(
         build_config(),
@@ -93,6 +104,7 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
         commands_module=FakeCommandsModule,
         register_commands_func=fake_register_commands,
         sync_commands_func=fake_sync_commands,
+        pterodactyl_bridge_factory=fake_bridge_factory,
     )
 
     assert bot.command_prefix == "when-mentioned"
@@ -100,10 +112,16 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
     assert intents_calls == ["default"]
     assert len(bot.listeners) == 1
     assert bot.listeners[0][1] == "on_ready"
+    assert bridge_factory_calls == [
+        (
+            build_config().pterodactyl,
+            build_config().policy,
+        )
+    ]
 
     asyncio.run(bot.setup_hook())
 
-    assert register_calls == [("tree", "app-commands-module")]
+    assert register_calls == [("tree", "app-commands-module", fake_bridge)]
     assert len(sync_calls) == 1
     assert sync_calls[0][0] == "tree"
     assert isinstance(sync_calls[0][1], FakeObject)
@@ -115,7 +133,13 @@ def test_create_bot_logs_ready_state_with_connected_user(
 ) -> None:
     fake_discord_module, _ = build_fake_discord_module()
 
-    def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
+    def fake_register_commands(
+        tree: Any,
+        *,
+        app_commands_module: Any,
+        pterodactyl_bridge: Any,
+    ) -> None:
+        del pterodactyl_bridge
         return None
 
     async def fake_sync_commands(tree: Any, *, guild: Any) -> list[str]:
@@ -139,7 +163,13 @@ def test_create_bot_logs_ready_state_with_connected_user(
 def test_create_bot_logs_ready_state_without_user(caplog: pytest.LogCaptureFixture) -> None:
     fake_discord_module, _ = build_fake_discord_module()
 
-    def fake_register_commands(tree: Any, *, app_commands_module: Any) -> None:
+    def fake_register_commands(
+        tree: Any,
+        *,
+        app_commands_module: Any,
+        pterodactyl_bridge: Any,
+    ) -> None:
+        del pterodactyl_bridge
         return None
 
     async def fake_sync_commands(tree: Any, *, guild: Any) -> list[str]:

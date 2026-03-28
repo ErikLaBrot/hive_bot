@@ -8,7 +8,8 @@ quality toolchain around that code. Issue `#3` adds the `/ping` slash command
 implementation. Issue `#4` adds guild-scoped slash-command registration
 infrastructure. Issue `#5` wires those pieces into a live Discord client.
 Issue `#13` adds the Pterodactyl configuration and bridge foundation that later
-milestone work will use for discovery-first server management.
+milestone work will use for discovery-first server management. Issue `#11`
+adds the first `/server` read-only Discord commands on top of that bridge.
 
 ## Setup
 
@@ -82,6 +83,19 @@ supports:
 If the panel is unreachable or memory data is incomplete, the bridge returns
 structured safe results instead of leaking raw API exceptions.
 
+## `/server` Read-Only Commands
+
+Issue `#11` adds the first discovery-driven `/server` command group:
+
+- `/server list`
+- `/server status <server>`
+- `/server budget`
+- `/server help`
+
+These commands always discover the accessible Pterodactyl server inventory at
+invocation time, then format safe Discord responses for success, not-found,
+ambiguous-match, partial-budget, and panel-unreachable results.
+
 ## Quality Checks
 
 Run the project quality commands with:
@@ -106,6 +120,8 @@ When the bot connects successfully, it will:
 - register the milestone commands on its command tree
 - sync those commands to the configured target guild
 - log the connected bot identity for manual ready-state verification
+- expose `/ping` and the read-only `/server` command group in the configured
+  guild
 
 ## Manual Validation
 
@@ -115,3 +131,6 @@ When the bot connects successfully, it will:
 3. Run `python3 -m hive_bot --config config.local.toml`.
 4. Verify the bot appears online and logs that it is ready.
 5. Verify `/ping` appears in the configured guild and responds with `pong`.
+6. Verify `/server help` appears and lists the available read-only commands.
+7. Verify `/server list`, `/server status <server>`, and `/server budget`
+   return live Pterodactyl-backed responses for the configured bot user.

@@ -52,17 +52,25 @@ class FailingCopyCommandTree(FakeCommandTree):
 def test_register_commands_adds_ping_command(monkeypatch: pytest.MonkeyPatch) -> None:
     tree = FakeCommandTree()
     received_modules: list[Any] = []
+    received_bridges: list[Any] = []
 
     def fake_build_ping_command(*, app_commands_module: Any) -> str:
         received_modules.append(app_commands_module)
         return "ping-command"
 
-    monkeypatch.setattr("hive_bot.command_registry.build_ping_command", fake_build_ping_command)
+    def fake_build_server_group(*, app_commands_module: Any, bridge: Any) -> str:
+        received_bridges.append(bridge)
+        assert app_commands_module == "app-commands-module"
+        return "server-group"
 
-    register_commands(tree, app_commands_module="app-commands-module")
+    monkeypatch.setattr("hive_bot.command_registry.build_ping_command", fake_build_ping_command)
+    monkeypatch.setattr("hive_bot.command_registry.build_server_group", fake_build_server_group)
+
+    register_commands(tree, app_commands_module="app-commands-module", pterodactyl_bridge="bridge")
 
     assert received_modules == ["app-commands-module"]
-    assert tree.added_commands == [("ping-command", True)]
+    assert received_bridges == ["bridge"]
+    assert tree.added_commands == [("ping-command", True), ("server-group", True)]
 
 
 def test_sync_commands_copies_globals_and_syncs(caplog: pytest.LogCaptureFixture) -> None:

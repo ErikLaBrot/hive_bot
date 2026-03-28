@@ -39,7 +39,7 @@ class PolicyConfig:
 
     @property
     def max_total_ram_mib(self) -> int:
-        """Return the configured RAM ceiling converted to MiB."""
+        """Return the configured RAM ceiling converted from binary GiB to MiB."""
 
         return self.max_total_ram_gb * 1024
 
@@ -116,6 +116,8 @@ def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, .
 def _require_http_url(config_data: dict[str, object], path: tuple[str, ...]) -> str:
     value = _require_non_empty_string(config_data, path)
     dotted_path = ".".join(path)
+    # Keep startup validation lightweight here; stricter URL parsing can be
+    # added later if config mistakes around hostnames become a recurring issue.
     if not value.startswith(("http://", "https://")):
         raise ConfigError(f"{dotted_path} must start with http:// or https://")
     return value.rstrip("/")

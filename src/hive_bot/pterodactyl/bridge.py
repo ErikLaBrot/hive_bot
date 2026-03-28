@@ -76,6 +76,9 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
+                    # Discovery failures keep their own operation label so
+                    # callers can distinguish inventory lookup from later
+                    # status/utilization failures.
                     discovered_servers = await self._discover_servers_in_session(client)
                 except Exception as exc:
                     return self._panel_unavailable("discover servers", exc)
@@ -150,6 +153,8 @@ class PterodactylBridge:
         if isinstance(response, list):
             # Older/compat py-dactyl responses may already be flattened to a
             # single page list, so this warning is only about that shim path.
+            # Use >= 100 because the compat response gives us no pagination
+            # metadata, so exactly 100 results may still mean "there were more."
             if len(response) >= 100:
                 self._logger.warning(
                     "Received %s servers from a plain-list py-dactyl response; "

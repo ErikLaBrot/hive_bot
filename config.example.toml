@@ -8,6 +8,7 @@ api_key = "replace-me"
 
 [policy]
 max_running_servers = 2
+# Interpreted as binary GiB and converted to MiB for Pterodactyl comparisons.
 max_total_ram_gb = 10
 
 [logging]

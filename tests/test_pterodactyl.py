@@ -13,13 +13,17 @@ import hive_bot.pterodactyl as pterodactyl
 from hive_bot.config import PolicyConfig, PterodactylConfig
 from hive_bot.pterodactyl import (
     AmbiguousServerMatch,
+    BudgetResult,
     BudgetStatus,
     DiscoveredServers,
+    DiscoverServersResult,
     PanelUnavailable,
     PterodactylBridge,
     ResolvedServer,
+    ResolveServerResult,
     ServerNotFound,
     ServerStatus,
+    ServerStatusResult,
     create_client,
 )
 
@@ -72,6 +76,8 @@ class FakeServersApi:
         detail: bool = False,
     ) -> dict[str, Any]:
         del detail
+        if server_id not in self.utilization_by_identifier:
+            raise AssertionError(f"Missing fake server utilization for {server_id}")
         result = self.utilization_by_identifier[server_id]
         if isinstance(result, Exception):
             raise result
@@ -182,18 +188,34 @@ def test_create_client_passes_runtime_config_to_py_dactyl(
 def test_pterodactyl_package_exports_foundation_symbols() -> None:
     exported_names = {
         "AmbiguousServerMatch",
+        "BudgetResult",
         "BudgetStatus",
+        "DiscoverServersResult",
         "DiscoveredServer",
         "DiscoveredServers",
         "PanelUnavailable",
         "PterodactylBridge",
+        "ResolveServerResult",
         "ResolvedServer",
         "ServerNotFound",
+        "ServerStatusResult",
         "ServerStatus",
         "create_client",
     }
 
     assert exported_names.issubset(set(pterodactyl.__all__))
+
+
+def test_pterodactyl_package_exports_result_aliases_for_annotations() -> None:
+    budget_result: BudgetResult | None = None
+    discover_result: DiscoverServersResult | None = None
+    resolve_result: ResolveServerResult | None = None
+    status_result: ServerStatusResult | None = None
+
+    assert budget_result is None
+    assert discover_result is None
+    assert resolve_result is None
+    assert status_result is None
 
 
 def test_discover_servers_collects_paginated_results_and_sorts_servers() -> None:

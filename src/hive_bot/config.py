@@ -5,6 +5,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 DEFAULT_CONFIG_PATH = Path("config.local.toml")
 VALID_LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
@@ -119,11 +120,20 @@ def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, .
 def _require_http_url(config_data: dict[str, object], path: tuple[str, ...]) -> str:
     value = _require_non_empty_string(config_data, path)
     dotted_path = ".".join(path)
-    # Keep startup validation lightweight here; stricter URL parsing can be
-    # added later if config mistakes around hostnames become a recurring issue.
-    if not value.startswith(("http://", "https://")):
-        raise ConfigError(f"{dotted_path} must start with http:// or https://")
-    return value.rstrip("/")
+    parsed_url = urlsplit(value)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ConfigError(f"{dotted_path} must be a valid http:// or https:// URL")
+
+    normalized_path = parsed_url.path.rstrip("/")
+    return urlunsplit(
+        (
+            parsed_url.scheme,
+            parsed_url.netloc,
+            normalized_path,
+            parsed_url.query,
+            parsed_url.fragment,
+        )
+    )
 
 
 def _require_positive_int(config_data: dict[str, object], path: tuple[str, ...]) -> int:

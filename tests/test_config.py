@@ -379,7 +379,31 @@ def test_load_config_raises_for_panel_url_without_http_scheme(tmp_path: Path) ->
 
     with pytest.raises(
         ConfigError,
-        match="pterodactyl.panel_url must start with http:// or https://",
+        match="pterodactyl.panel_url must be a valid http:// or https:// URL",
+    ):
+        load_config(config_path)
+
+
+def test_load_config_raises_for_panel_url_without_host(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        (
+            "[discord]\n"
+            'token = "token-value"\n'
+            "guild_id = 42\n\n"
+            "[pterodactyl]\n"
+            'panel_url = "https://"\n'
+            'api_key = "ptlc_test"\n\n'
+            "[policy]\n"
+            "max_running_servers = 2\n"
+            "max_total_ram_gb = 10\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="pterodactyl.panel_url must be a valid http:// or https:// URL",
     ):
         load_config(config_path)
 

@@ -83,6 +83,9 @@ class PterodactylBridge:
                 except Exception as exc:
                     return self._panel_unavailable("discover servers", exc)
 
+                # Resolution is a pure in-memory step; keep it inside the
+                # shared session block so discovery and utilization still reuse
+                # the same client lifecycle.
                 resolve_result = _resolve_from_servers(query, discovered_servers)
                 if not isinstance(resolve_result, ResolvedServer):
                     return resolve_result
@@ -284,6 +287,7 @@ def _read_memory_limit(attributes: dict[str, Any]) -> int | None:
     memory_limit = limits.get("memory")
     if isinstance(memory_limit, bool) or not isinstance(memory_limit, int):
         return None
+    # 0 means unlimited in Pterodactyl; treat it as unknown for budget checks.
     if memory_limit <= 0:
         return None
     return memory_limit

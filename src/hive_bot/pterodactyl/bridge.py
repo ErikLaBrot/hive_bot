@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import aiohttp
 from pydactyl.exceptions import PydactylError  # type: ignore[import-untyped]
@@ -48,6 +50,35 @@ MONITOR_INACTIVITY_TIMEOUT_SECONDS = 15.0
 MONITOR_HARD_TIMEOUT_SECONDS = 120.0
 
 
+class MonitorWebsocketProtocol(Protocol):
+    """Connected websocket interface used by completion monitoring."""
+
+    async def authenticate(self) -> None:
+        """Send websocket authentication using the temporary token."""
+
+    async def request_stats(self) -> None:
+        """Request stats events from the websocket."""
+
+    def listen(self) -> AsyncIterator[dict[str, Any]]:
+        """Yield decoded websocket events."""
+
+    async def close(self) -> None:
+        """Close the websocket connection."""
+
+
+class WebsocketConnector(Protocol):
+    """Callable interface for opening a connected server websocket."""
+
+    async def __call__(
+        self,
+        *,
+        socket_url: str,
+        token: str,
+        panel_url: str,
+    ) -> MonitorWebsocketProtocol:
+        """Open and return a connected websocket."""
+
+
 class PterodactylBridge:
     """Encapsulate discovery-first access to Pterodactyl."""
 
@@ -57,11 +88,15 @@ class PterodactylBridge:
         policy: PolicyConfig,
         *,
         client_factory: ClientFactory = create_client,
+        websocket_connector: WebsocketConnector | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._config = config
         self._policy = policy
         self._client_factory = client_factory
+        self._websocket_connector = (
+            _connect_monitor_websocket if websocket_connector is None else websocket_connector
+        )
         self._logger = LOGGER if logger is None else logger
 
     async def discover_servers(self) -> DiscoverServersResult:
@@ -287,10 +322,13 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
-                    websocket = await client.client.servers.get_websocket_client(
-                        server.identifier
+                    websocket_info = await client.client.servers.get_websocket(server.identifier)
+                    socket_url, token = _read_websocket_credentials(websocket_info)
+                    websocket = await self._websocket_connector(
+                        socket_url=socket_url,
+                        token=token,
+                        panel_url=self._config.panel_url,
                     )
-                    await websocket.connect()
                     await websocket.authenticate()
                     await websocket.request_stats()
                 except Exception as exc:
@@ -585,6 +623,66 @@ class PterodactylBridge:
         return PanelUnavailable(operation=operation)
 
 
+class _AiohttpMonitorWebsocket:
+    def __init__(
+        self,
+        *,
+        session: aiohttp.ClientSession,
+        websocket: aiohttp.ClientWebSocketResponse,
+        token: str,
+    ) -> None:
+        self._session = session
+        self._websocket = websocket
+        self._token = token
+
+    async def authenticate(self) -> None:
+        await self._websocket.send_json({"event": "auth", "args": [self._token]})
+
+    async def request_stats(self) -> None:
+        await self._websocket.send_json({"event": "send stats", "args": []})
+
+    async def close(self) -> None:
+        await self._websocket.close()
+        await self._session.close()
+
+    async def listen(self) -> AsyncIterator[dict[str, Any]]:
+        async for message in self._websocket:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    payload = json.loads(message.data)
+                except ValueError:
+                    continue
+                if isinstance(payload, dict):
+                    yield payload
+            elif message.type == aiohttp.WSMsgType.ERROR:
+                break
+
+
+async def _connect_monitor_websocket(
+    *,
+    socket_url: str,
+    token: str,
+    panel_url: str,
+) -> MonitorWebsocketProtocol:
+    session = aiohttp.ClientSession()
+    try:
+        websocket = await session.ws_connect(
+            socket_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Origin": panel_url,
+            },
+        )
+    except Exception:
+        await session.close()
+        raise
+    return _AiohttpMonitorWebsocket(
+        session=session,
+        websocket=websocket,
+        token=token,
+    )
+
+
 def _resolve_from_servers(query: str, servers: tuple[DiscoveredServer, ...]) -> ResolveServerResult:
     normalized_query = query.strip().casefold()
     if not normalized_query:
@@ -596,6 +694,18 @@ def _resolve_from_servers(query: str, servers: tuple[DiscoveredServer, ...]) -> 
     if len(matches) > 1:
         return AmbiguousServerMatch(query=query, matches=matches)
     return ResolvedServer(query=query, server=matches[0])
+
+
+def _read_websocket_credentials(payload: dict[str, Any]) -> tuple[str, str]:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Missing websocket data payload")
+
+    socket_url = _read_optional_string(data.get("socket"))
+    token = _read_optional_string(data.get("token"))
+    if socket_url is None or token is None:
+        raise RuntimeError("Missing websocket socket URL or token")
+    return socket_url, token
 
 
 def _matches_query(server: DiscoveredServer, normalized_query: str) -> bool:

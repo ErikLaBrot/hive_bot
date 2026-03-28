@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
+import aiohttp
 import pytest
 from pydactyl.exceptions import PterodactylApiError  # type: ignore[import-untyped]
 
@@ -116,12 +117,13 @@ class FakeServersApi:
             raise self.power_action_error
         return {}
 
-    async def get_websocket_client(self, server_id: str) -> FakeWebsocketClient:
-        if self.websocket_setup_error is not None:
-            raise self.websocket_setup_error
-        return FakeWebsocketClient(
-            events=self.websocket_events_by_identifier.get(server_id, []),
-        )
+    async def get_websocket(self, server_id: str) -> dict[str, Any]:
+        return {
+            "data": {
+                "socket": f"ws://socket.example.test/{server_id}",
+                "token": f"token-{server_id}",
+            }
+        }
 
 
 class FakeWebsocketClient:
@@ -196,6 +198,20 @@ def build_bridge(
         websocket_setup_error=websocket_setup_error,
     )
 
+    async def fake_websocket_connector(
+        *,
+        socket_url: str,
+        token: str,
+        panel_url: str,
+    ) -> FakeWebsocketClient:
+        del token, panel_url
+        if websocket_setup_error is not None:
+            raise websocket_setup_error
+        server_id = socket_url.rsplit("/", 1)[-1]
+        return FakeWebsocketClient(
+            events=servers_api.websocket_events_by_identifier.get(server_id, []),
+        )
+
     def fake_client_factory(
         config: PterodactylConfig,
         *,
@@ -213,6 +229,7 @@ def build_bridge(
             PterodactylConfig(panel_url="https://panel.example.com", api_key="ptlc_test"),
             PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
             client_factory=fake_client_factory,
+            websocket_connector=fake_websocket_connector,
             logger=logger,
         ),
         servers_api,
@@ -1819,3 +1836,162 @@ def test_websocket_activity_tracker_marks_events() -> None:
 
     assert before >= 0
     assert after >= 0
+
+
+def test_read_websocket_credentials_rejects_missing_payload() -> None:
+    with pytest.raises(RuntimeError, match="Missing websocket data payload"):
+        bridge_module._read_websocket_credentials({})
+
+
+def test_read_websocket_credentials_rejects_missing_socket_or_token() -> None:
+    with pytest.raises(RuntimeError, match="Missing websocket socket URL or token"):
+        bridge_module._read_websocket_credentials({"data": {"socket": "ws://socket"}})
+
+
+def test_aiohttp_monitor_websocket_authenticates_requests_stats_and_closes() -> None:
+    sent_payloads: list[dict[str, Any]] = []
+    websocket_closed = False
+    session_closed = False
+
+    class FakeWebsocket:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            sent_payloads.append(payload)
+
+        async def close(self) -> None:
+            nonlocal websocket_closed
+            websocket_closed = True
+
+        def __aiter__(self) -> AsyncIterator[Any]:
+            async def iterator() -> AsyncIterator[Any]:
+                if False:
+                    yield None
+
+            return iterator()
+
+    class FakeSession:
+        async def close(self) -> None:
+            nonlocal session_closed
+            session_closed = True
+
+    async def exercise() -> None:
+        websocket = bridge_module._AiohttpMonitorWebsocket(
+            session=cast(aiohttp.ClientSession, FakeSession()),
+            websocket=cast(aiohttp.ClientWebSocketResponse, FakeWebsocket()),
+            token="token-123",
+        )
+        await websocket.authenticate()
+        await websocket.request_stats()
+        await websocket.close()
+
+    asyncio.run(exercise())
+
+    assert sent_payloads == [
+        {"event": "auth", "args": ["token-123"]},
+        {"event": "send stats", "args": []},
+    ]
+    assert websocket_closed is True
+    assert session_closed is True
+
+
+def test_aiohttp_monitor_websocket_listen_filters_invalid_and_error_messages() -> None:
+    class FakeMessage:
+        def __init__(self, message_type: aiohttp.WSMsgType, data: str) -> None:
+            self.type = message_type
+            self.data = data
+
+    class FakeWebsocket:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            del payload
+
+        async def close(self) -> None:
+            return None
+
+        def __aiter__(self) -> AsyncIterator[FakeMessage]:
+            async def iterator() -> AsyncIterator[FakeMessage]:
+                yield FakeMessage(aiohttp.WSMsgType.TEXT, "not json")
+                yield FakeMessage(aiohttp.WSMsgType.TEXT, '{"event":"stats"}')
+                yield FakeMessage(aiohttp.WSMsgType.ERROR, "")
+
+            return iterator()
+
+    class FakeSession:
+        async def close(self) -> None:
+            return None
+
+    async def collect_events() -> list[dict[str, Any]]:
+        websocket = bridge_module._AiohttpMonitorWebsocket(
+            session=cast(aiohttp.ClientSession, FakeSession()),
+            websocket=cast(aiohttp.ClientWebSocketResponse, FakeWebsocket()),
+            token="token-123",
+        )
+        return [event async for event in websocket.listen()]
+
+    assert asyncio.run(collect_events()) == [{"event": "stats"}]
+
+
+def test_connect_monitor_websocket_uses_bearer_and_origin_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, str]]] = []
+
+    class FakeConnectedWebsocket:
+        pass
+
+    class FakeSession:
+        async def ws_connect(self, url: str, headers: dict[str, str]) -> FakeConnectedWebsocket:
+            captured.append((url, headers))
+            return FakeConnectedWebsocket()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    async def exercise() -> bridge_module.MonitorWebsocketProtocol:
+        return await bridge_module._connect_monitor_websocket(
+            socket_url="ws://socket.example.test/alpha-1",
+            token="token-123",
+            panel_url="https://panel.example.com",
+        )
+
+    result = asyncio.run(exercise())
+
+    assert isinstance(result, bridge_module._AiohttpMonitorWebsocket)
+    assert captured == [
+        (
+            "ws://socket.example.test/alpha-1",
+            {
+                "Authorization": "Bearer token-123",
+                "Origin": "https://panel.example.com",
+            },
+        )
+    ]
+
+
+def test_connect_monitor_websocket_closes_session_when_connect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed = False
+
+    class FakeSession:
+        async def ws_connect(self, url: str, headers: dict[str, str]) -> Any:
+            del url, headers
+            raise RuntimeError("ws connect failed")
+
+        async def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    async def exercise() -> None:
+        await bridge_module._connect_monitor_websocket(
+            socket_url="ws://socket.example.test/alpha-1",
+            token="token-123",
+            panel_url="https://panel.example.com",
+        )
+
+    with pytest.raises(RuntimeError, match="ws connect failed"):
+        asyncio.run(exercise())
+
+    assert closed is True

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, cast
 
@@ -46,32 +46,8 @@ class AsyncServerApi(Protocol):
     async def send_power_action(self, server_id: str, signal: str) -> object:
         """Send a power signal to a single server."""
 
-    async def get_websocket_client(self, server_id: str) -> AsyncWebsocketClientProtocol:
-        """Return a websocket client for one server."""
-
-
-class AsyncWebsocketClientProtocol(Protocol):
-    """Subset of the py-dactyl websocket client used for action monitoring."""
-
-    async def connect(self) -> None:
-        """Open the websocket connection."""
-
-    async def authenticate(self) -> None:
-        """Authenticate the websocket connection."""
-
-    async def request_stats(self) -> None:
-        """Start or refresh the stats stream."""
-
-    def listen(
-        self,
-        events: Iterable[str] = (),
-        exclude_events: Iterable[str] = (),
-    ) -> AsyncIterator[dict[str, Any]]:
-        """Yield websocket events."""
-
-    async def close(self) -> None:
-        """Close the websocket connection."""
-
+    async def get_websocket(self, server_id: str) -> dict[str, Any]:
+        """Return websocket connection metadata for one server."""
 
 class AsyncClientApi(Protocol):
     """Subset of the py-dactyl client namespace used by the bridge."""

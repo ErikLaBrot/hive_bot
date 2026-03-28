@@ -346,6 +346,7 @@ def _format_action_denied_message(result: ServerActionDenied) -> str:
             f"{result.remaining_memory_mib} MiB)."
         )
     if result.reason == "not-running":
+        assert result.server is not None
         return f"{label} is not running; use `/server start` instead."
 
     message = f"Unsupported action denial reason: {result.reason!r}"
@@ -370,10 +371,10 @@ def _audit_action_result(
     user_name = str(user) if user is not None else "unknown-user"
     resolved = _resolved_server_for_result(result)
     resolved_label = _format_server_label(resolved) if resolved is not None else "unresolved"
-    outcome, reason = _action_outcome_fields(result)
+    outcome, reason, operation = _action_outcome_fields(result)
     LOGGER.info(
         "Pterodactyl audit: user=%s (%s) command=/server %s "
-        "query=%r resolved=%s outcome=%s reason=%s",
+        "query=%r resolved=%s outcome=%s reason=%s operation=%s",
         user_name,
         user_id,
         action,
@@ -381,6 +382,7 @@ def _audit_action_result(
         resolved_label,
         outcome,
         reason,
+        operation,
     )
 
 
@@ -390,19 +392,19 @@ def _resolved_server_for_result(result: ActionResult) -> DiscoveredServer | None
     return None
 
 
-def _action_outcome_fields(result: ActionResult) -> tuple[str, str]:
+def _action_outcome_fields(result: ActionResult) -> tuple[str, str, str]:
     if isinstance(result, PanelUnavailable):
-        return ("panel-unavailable", result.operation)
+        return ("panel-unavailable", "panel-unavailable", result.operation)
     if isinstance(result, ServerNotFound):
-        return ("not-found", "server-not-found")
+        return ("not-found", "server-not-found", "-")
     if isinstance(result, AmbiguousServerMatch):
-        return ("ambiguous", "ambiguous-match")
+        return ("ambiguous", "ambiguous-match", "-")
     if isinstance(result, ServerActionAccepted):
-        return ("accepted", "accepted")
+        return ("accepted", "accepted", "-")
     if isinstance(result, ServerActionNoOp):
-        return ("no-op", result.reason)
+        return ("no-op", result.reason, "-")
     if isinstance(result, ServerActionDenied):
-        return ("denied", result.reason)
+        return ("denied", result.reason, "-")
 
     message = f"Unsupported action result: {type(result)!r}"
     raise AssertionError(message)

@@ -503,6 +503,7 @@ def test_handle_server_start_formats_acceptance_and_audits(
     assert "command=/server start" in caplog.text
     assert "outcome=accepted" in caplog.text
     assert "resolved=Alpha (`alpha-1`)" in caplog.text
+    assert "reason=accepted operation=-" in caplog.text
 
 
 def test_handle_server_start_audits_before_response_failure(
@@ -528,6 +529,7 @@ def test_handle_server_start_audits_before_response_failure(
 
     assert "command=/server start" in caplog.text
     assert "outcome=accepted" in caplog.text
+    assert "operation=-" in caplog.text
 
 
 def test_handle_server_start_formats_policy_denial_and_audits(
@@ -558,6 +560,7 @@ def test_handle_server_start_formats_policy_denial_and_audits(
     ]
     assert "outcome=denied" in caplog.text
     assert "reason=max-running-servers" in caplog.text
+    assert "operation=-" in caplog.text
 
 
 def test_handle_server_stop_formats_no_op_and_audits(caplog: pytest.LogCaptureFixture) -> None:
@@ -583,6 +586,7 @@ def test_handle_server_stop_formats_no_op_and_audits(caplog: pytest.LogCaptureFi
     assert "command=/server stop" in caplog.text
     assert "outcome=no-op" in caplog.text
     assert "reason=already-stopped" in caplog.text
+    assert "operation=-" in caplog.text
 
 
 def test_handle_server_restart_formats_denial_and_audits(
@@ -612,6 +616,7 @@ def test_handle_server_restart_formats_denial_and_audits(
     assert "command=/server restart" in caplog.text
     assert "outcome=denied" in caplog.text
     assert "reason=not-running" in caplog.text
+    assert "operation=-" in caplog.text
 
 
 def test_handle_server_help_is_static() -> None:
@@ -971,10 +976,11 @@ def test_resolved_server_for_result_returns_none_for_unresolved_results() -> Non
 def test_action_outcome_fields_cover_unresolved_results() -> None:
     assert server_commands._action_outcome_fields(
         PanelUnavailable(operation="start server")
-    ) == ("panel-unavailable", "start server")
+    ) == ("panel-unavailable", "panel-unavailable", "start server")
     assert server_commands._action_outcome_fields(ServerNotFound(query="ghost")) == (
         "not-found",
         "server-not-found",
+        "-",
     )
     assert server_commands._action_outcome_fields(
         AmbiguousServerMatch(
@@ -994,7 +1000,7 @@ def test_action_outcome_fields_cover_unresolved_results() -> None:
                 ),
             ),
         )
-    ) == ("ambiguous", "ambiguous-match")
+    ) == ("ambiguous", "ambiguous-match", "-")
 
 
 def test_action_outcome_fields_rejects_unsupported_type() -> None:

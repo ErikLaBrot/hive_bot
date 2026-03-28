@@ -1086,6 +1086,30 @@ def test_start_server_returns_not_found_when_query_does_not_match() -> None:
     assert servers_api.power_actions == []
 
 
+def test_start_server_returns_ambiguous_match_when_multiple_servers_match() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+            discovered_item(
+                name="alpha",
+                identifier="alpha-2",
+                state="offline",
+                memory_limit_mib=2048,
+            ),
+        ]
+    )
+
+    result = asyncio.run(bridge.start_server("alpha"))
+
+    assert isinstance(result, AmbiguousServerMatch)
+    assert servers_api.power_actions == []
+
+
 def test_start_server_returns_panel_unavailable_when_discovery_fails() -> None:
     bridge, _ = build_bridge(list_result=PterodactylApiError("panel down"))
 
@@ -1160,6 +1184,30 @@ def test_restart_server_returns_not_found_when_query_does_not_match() -> None:
     result = asyncio.run(bridge.restart_server("missing"))
 
     assert result == ServerNotFound(query="missing")
+    assert servers_api.power_actions == []
+
+
+def test_restart_server_returns_ambiguous_match_when_multiple_servers_match() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+            discovered_item(
+                name="alpha",
+                identifier="alpha-2",
+                state="running",
+                memory_limit_mib=2048,
+            ),
+        ]
+    )
+
+    result = asyncio.run(bridge.restart_server("alpha"))
+
+    assert isinstance(result, AmbiguousServerMatch)
     assert servers_api.power_actions == []
 
 

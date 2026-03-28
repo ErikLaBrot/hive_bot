@@ -5,6 +5,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 DEFAULT_CONFIG_PATH = Path("config.local.toml")
 VALID_LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
@@ -23,10 +24,34 @@ class DiscordConfig:
 
 
 @dataclass(frozen=True)
+class PterodactylConfig:
+    """Pterodactyl client runtime settings."""
+
+    panel_url: str
+    api_key: str
+
+
+@dataclass(frozen=True)
+class PolicyConfig:
+    """Policy limits for server management commands."""
+
+    max_running_servers: int
+    max_total_ram_gb: int
+
+    @property
+    def max_total_ram_mib(self) -> int:
+        """Return the configured RAM ceiling converted from binary GiB to MiB."""
+
+        return self.max_total_ram_gb * 1024
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Top-level runtime settings."""
 
     discord: DiscordConfig
+    pterodactyl: PterodactylConfig
+    policy: PolicyConfig
     log_level: str = "INFO"
 
 
@@ -42,10 +67,24 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Config file is not valid TOML: {path}") from exc
 
+    _require_mapping(config_data, ("pterodactyl",))
+    _require_mapping(config_data, ("policy",))
+
     return AppConfig(
         discord=DiscordConfig(
             token=_require_non_empty_string(config_data, ("discord", "token")),
             guild_id=_require_positive_int(config_data, ("discord", "guild_id")),
+        ),
+        pterodactyl=PterodactylConfig(
+            panel_url=_require_http_url(config_data, ("pterodactyl", "panel_url")),
+            api_key=_require_non_empty_string(config_data, ("pterodactyl", "api_key")),
+        ),
+        policy=PolicyConfig(
+            max_running_servers=_require_positive_int(
+                config_data,
+                ("policy", "max_running_servers"),
+            ),
+            max_total_ram_gb=_require_positive_int(config_data, ("policy", "max_total_ram_gb")),
         ),
         log_level=_read_log_level(config_data),
     )
@@ -76,6 +115,25 @@ def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, .
         raise ConfigError(f"{dotted_path} must be a non-empty string")
 
     return normalized_value
+
+
+def _require_http_url(config_data: dict[str, object], path: tuple[str, ...]) -> str:
+    value = _require_non_empty_string(config_data, path)
+    dotted_path = ".".join(path)
+    parsed_url = urlsplit(value)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ConfigError(f"{dotted_path} must be a valid http:// or https:// URL")
+
+    normalized_path = parsed_url.path.rstrip("/")
+    return urlunsplit(
+        (
+            parsed_url.scheme,
+            parsed_url.netloc,
+            normalized_path,
+            parsed_url.query,
+            parsed_url.fragment,
+        )
+    )
 
 
 def _require_positive_int(config_data: dict[str, object], path: tuple[str, ...]) -> int:

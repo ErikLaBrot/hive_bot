@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from hive_bot.bot import create_bot, run_bot
-from hive_bot.config import AppConfig, DiscordConfig
+from hive_bot.config import AppConfig, DiscordConfig, PolicyConfig, PterodactylConfig
 
 
 class FakeObject:
@@ -47,7 +47,15 @@ class FakeUser:
 
 
 def build_config() -> AppConfig:
-    return AppConfig(discord=DiscordConfig(token="token-value", guild_id=42), log_level="INFO")
+    return AppConfig(
+        discord=DiscordConfig(token="token-value", guild_id=42),
+        pterodactyl=PterodactylConfig(
+            panel_url="https://panel.example.com",
+            api_key="ptlc_test",
+        ),
+        policy=PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+        log_level="INFO",
+    )
 
 
 def build_fake_discord_module(*, default_intents: str = "default-intents") -> tuple[Any, list[str]]:

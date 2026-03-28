@@ -8,11 +8,19 @@ from pathlib import Path
 import pytest
 
 from hive_bot import app
-from hive_bot.config import AppConfig, ConfigError, DiscordConfig
+from hive_bot.config import AppConfig, ConfigError, DiscordConfig, PolicyConfig, PterodactylConfig
 
 
 def test_bootstrap_application_loads_config_and_logging() -> None:
-    config = AppConfig(discord=DiscordConfig(token="token-value", guild_id=42), log_level="DEBUG")
+    config = AppConfig(
+        discord=DiscordConfig(token="token-value", guild_id=42),
+        pterodactyl=PterodactylConfig(
+            panel_url="https://panel.example.com",
+            api_key="ptlc_test",
+        ),
+        policy=PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+        log_level="DEBUG",
+    )
     received_paths: list[Path] = []
     log_levels: list[str] = []
 
@@ -45,7 +53,14 @@ def test_build_parser_uses_expected_default() -> None:
 def test_main_returns_zero_for_valid_config(monkeypatch: pytest.MonkeyPatch) -> None:
     received_paths: list[Path] = []
     received_configs: list[AppConfig] = []
-    config = AppConfig(discord=DiscordConfig(token="token-value", guild_id=42))
+    config = AppConfig(
+        discord=DiscordConfig(token="token-value", guild_id=42),
+        pterodactyl=PterodactylConfig(
+            panel_url="https://panel.example.com",
+            api_key="ptlc_test",
+        ),
+        policy=PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+    )
 
     def fake_bootstrap_application(config_path: Path) -> AppConfig:
         received_paths.append(config_path)
@@ -84,7 +99,14 @@ def test_main_returns_error_for_bot_startup_failure(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    config = AppConfig(discord=DiscordConfig(token="token-value", guild_id=42))
+    config = AppConfig(
+        discord=DiscordConfig(token="token-value", guild_id=42),
+        pterodactyl=PterodactylConfig(
+            panel_url="https://panel.example.com",
+            api_key="ptlc_test",
+        ),
+        policy=PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+    )
 
     def fake_bootstrap_application(config_path: Path) -> AppConfig:
         return config

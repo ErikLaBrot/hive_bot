@@ -101,7 +101,12 @@ class ServerActionNoOp:
 
 @dataclass(frozen=True, slots=True)
 class ServerActionDenied:
-    """A power action was denied after validation or policy checks."""
+    """A power action was denied after validation or policy checks.
+
+    Some fields are reason-specific. Callers must populate the fields required
+    by the chosen `reason`, and formatters should assert those invariants
+    rather than silently rendering `None`.
+    """
 
     action: str
     query: str

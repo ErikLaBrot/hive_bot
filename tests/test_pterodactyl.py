@@ -1003,6 +1003,24 @@ def test_stop_server_returns_no_op_when_target_is_already_stopped() -> None:
     assert servers_api.power_actions == []
 
 
+def test_stop_server_returns_not_found_when_query_does_not_match() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            )
+        ]
+    )
+
+    result = asyncio.run(bridge.stop_server("missing"))
+
+    assert result == ServerNotFound(query="missing")
+    assert servers_api.power_actions == []
+
+
 def test_restart_server_accepts_when_target_is_running() -> None:
     bridge, servers_api = build_bridge(
         list_result=[

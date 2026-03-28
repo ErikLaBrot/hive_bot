@@ -88,8 +88,8 @@ async def handle_server_start(
     """Respond to `/server start`."""
 
     result = await bridge.start_server(server)
-    await interaction.response.send_message(_format_action_result(result))
     _audit_action_result(interaction, action="start", query=server, result=result)
+    await interaction.response.send_message(_format_action_result(result))
 
 
 async def handle_server_stop(
@@ -101,8 +101,8 @@ async def handle_server_stop(
     """Respond to `/server stop`."""
 
     result = await bridge.stop_server(server)
-    await interaction.response.send_message(_format_action_result(result))
     _audit_action_result(interaction, action="stop", query=server, result=result)
+    await interaction.response.send_message(_format_action_result(result))
 
 
 async def handle_server_restart(
@@ -114,8 +114,8 @@ async def handle_server_restart(
     """Respond to `/server restart`."""
 
     result = await bridge.restart_server(server)
-    await interaction.response.send_message(_format_action_result(result))
     _audit_action_result(interaction, action="restart", query=server, result=result)
+    await interaction.response.send_message(_format_action_result(result))
 
 
 def build_server_group(*, app_commands_module: Any, bridge: ServerCommandBridge) -> Any:
@@ -317,6 +317,8 @@ def _format_action_no_op_message(result: ServerActionNoOp) -> str:
 def _format_action_denied_message(result: ServerActionDenied) -> str:
     label = _format_server_label(result.server)
     if result.reason == "max-running-servers":
+        assert result.running_server_count is not None
+        assert result.max_running_servers is not None
         return (
             f"Start denied for {label}: running server limit reached "
             f"({result.running_server_count}/{result.max_running_servers})."
@@ -327,6 +329,7 @@ def _format_action_denied_message(result: ServerActionDenied) -> str:
             "so the RAM budget cannot be enforced safely."
         )
     if result.reason == "missing-running-memory-limits":
+        assert result.missing_memory_limit_servers
         missing = ", ".join(
             _format_server_label(server) for server in result.missing_memory_limit_servers
         )
@@ -335,6 +338,8 @@ def _format_action_denied_message(result: ServerActionDenied) -> str:
             f"these running servers have unknown RAM limits: {missing}."
         )
     if result.reason == "insufficient-ram-headroom":
+        assert result.required_memory_mib is not None
+        assert result.remaining_memory_mib is not None
         return (
             f"Start denied for {label}: RAM budget would be exceeded "
             f"(needs {result.required_memory_mib} MiB, remaining "

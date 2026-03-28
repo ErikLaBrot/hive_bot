@@ -117,6 +117,7 @@ class PterodactylBridge:
     async def start_server(self, query: str) -> ActionResult:
         """Start a resolved server if policy checks allow it."""
 
+        accepted_result: ServerActionAccepted | None = None
         try:
             async with self._open_client() as client:
                 try:
@@ -181,14 +182,20 @@ class PterodactylBridge:
                     )
 
                 await client.client.servers.send_power_action(target_server.identifier, "start")
+                accepted_result = ServerActionAccepted(
+                    action="start",
+                    query=query,
+                    server=target_server,
+                )
         except Exception as exc:
             return self._panel_unavailable("start server", exc)
-
-        return ServerActionAccepted(action="start", query=query, server=target_server)
+        assert accepted_result is not None
+        return accepted_result
 
     async def stop_server(self, query: str) -> ActionResult:
         """Stop a resolved server if it is currently running."""
 
+        accepted_result: ServerActionAccepted | None = None
         try:
             async with self._open_client() as client:
                 try:
@@ -210,14 +217,20 @@ class PterodactylBridge:
                     )
 
                 await client.client.servers.send_power_action(target_server.identifier, "stop")
+                accepted_result = ServerActionAccepted(
+                    action="stop",
+                    query=query,
+                    server=target_server,
+                )
         except Exception as exc:
             return self._panel_unavailable("stop server", exc)
-
-        return ServerActionAccepted(action="stop", query=query, server=target_server)
+        assert accepted_result is not None
+        return accepted_result
 
     async def restart_server(self, query: str) -> ActionResult:
         """Restart a resolved server if it is currently running."""
 
+        accepted_result: ServerActionAccepted | None = None
         try:
             async with self._open_client() as client:
                 try:
@@ -239,10 +252,15 @@ class PterodactylBridge:
                     )
 
                 await client.client.servers.send_power_action(target_server.identifier, "restart")
+                accepted_result = ServerActionAccepted(
+                    action="restart",
+                    query=query,
+                    server=target_server,
+                )
         except Exception as exc:
             return self._panel_unavailable("restart server", exc)
-
-        return ServerActionAccepted(action="restart", query=query, server=target_server)
+        assert accepted_result is not None
+        return accepted_result
 
     def _open_client(self) -> ClientContextManager:
         return self._client_factory(self._config)

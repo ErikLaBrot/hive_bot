@@ -35,16 +35,24 @@ from hive_bot.pterodactyl import (
 
 
 class FakeResponse:
-    def __init__(self) -> None:
+    def __init__(self, *, error: Exception | None = None) -> None:
         self.messages: list[str] = []
+        self.error = error
 
     async def send_message(self, message: str) -> None:
+        if self.error is not None:
+            raise self.error
         self.messages.append(message)
 
 
 class FakeInteraction:
-    def __init__(self, *, user: Any | None = None) -> None:
-        self.response = FakeResponse()
+    def __init__(
+        self,
+        *,
+        user: Any | None = None,
+        response_error: Exception | None = None,
+    ) -> None:
+        self.response = FakeResponse(error=response_error)
         self.user = FakeUser() if user is None else user
 
 
@@ -497,6 +505,31 @@ def test_handle_server_start_formats_acceptance_and_audits(
     assert "resolved=Alpha (`alpha-1`)" in caplog.text
 
 
+def test_handle_server_start_audits_before_response_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge = FakeBridge(
+        start_result=ServerActionAccepted(
+            action="start",
+            query="alpha",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+        )
+    )
+    interaction = FakeInteraction(response_error=RuntimeError("send failed"))
+
+    with caplog.at_level(logging.INFO, logger="hive_bot.commands.server"):
+        with pytest.raises(RuntimeError, match="send failed"):
+            asyncio.run(handle_server_start(interaction, bridge=bridge, server="alpha"))
+
+    assert "command=/server start" in caplog.text
+    assert "outcome=accepted" in caplog.text
+
+
 def test_handle_server_start_formats_policy_denial_and_audits(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -854,6 +887,57 @@ def test_format_action_denied_message_handles_insufficient_ram_headroom() -> Non
         == "Start denied for Alpha (`alpha-1`): RAM budget would be exceeded "
         "(needs 4096 MiB, remaining 2048 MiB)."
     )
+
+
+def test_format_action_denied_message_rejects_missing_running_limit_fields() -> None:
+    with pytest.raises(AssertionError):
+        server_commands._format_action_denied_message(
+            ServerActionDenied(
+                action="start",
+                query="alpha",
+                reason="max-running-servers",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+
+
+def test_format_action_denied_message_rejects_empty_missing_running_servers() -> None:
+    with pytest.raises(AssertionError):
+        server_commands._format_action_denied_message(
+            ServerActionDenied(
+                action="start",
+                query="alpha",
+                reason="missing-running-memory-limits",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+
+
+def test_format_action_denied_message_rejects_missing_ram_headroom_fields() -> None:
+    with pytest.raises(AssertionError):
+        server_commands._format_action_denied_message(
+            ServerActionDenied(
+                action="start",
+                query="alpha",
+                reason="insufficient-ram-headroom",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
 
 
 def test_format_action_denied_message_rejects_unknown_reason() -> None:

@@ -46,7 +46,7 @@ class AsyncServerApi(Protocol):
     async def send_power_action(self, server_id: str, signal: str) -> object:
         """Send a power signal to a single server."""
 
-    def get_websocket_client(self, server_id: str) -> AsyncWebsocketClientProtocol:
+    async def get_websocket_client(self, server_id: str) -> AsyncWebsocketClientProtocol:
         """Return a websocket client for one server."""
 
 

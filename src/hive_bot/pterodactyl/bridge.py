@@ -287,7 +287,9 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
-                    websocket = client.client.servers.get_websocket_client(server.identifier)
+                    websocket = await client.client.servers.get_websocket_client(
+                        server.identifier
+                    )
                     await websocket.connect()
                     await websocket.authenticate()
                     await websocket.request_stats()

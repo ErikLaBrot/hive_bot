@@ -116,7 +116,7 @@ class FakeServersApi:
             raise self.power_action_error
         return {}
 
-    def get_websocket_client(self, server_id: str) -> FakeWebsocketClient:
+    async def get_websocket_client(self, server_id: str) -> FakeWebsocketClient:
         if self.websocket_setup_error is not None:
             raise self.websocket_setup_error
         return FakeWebsocketClient(

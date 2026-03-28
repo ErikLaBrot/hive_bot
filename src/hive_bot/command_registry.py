@@ -6,14 +6,19 @@ import logging
 from typing import Any, cast
 
 from hive_bot.commands.ping import build_ping_command
+from hive_bot.commands.server import build_server_group
 
 LOGGER = logging.getLogger(__name__)
 
 
-def register_commands(tree: Any, *, app_commands_module: Any) -> None:
+def register_commands(tree: Any, *, app_commands_module: Any, pterodactyl_bridge: Any) -> None:
     """Register the milestone slash commands on a command tree."""
 
     tree.add_command(build_ping_command(app_commands_module=app_commands_module), override=True)
+    tree.add_command(
+        build_server_group(app_commands_module=app_commands_module, bridge=pterodactyl_bridge),
+        override=True,
+    )
 
 
 async def sync_commands(tree: Any, *, guild: Any) -> list[Any]:

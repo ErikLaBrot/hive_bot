@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol, TypeAlias, cast
+from typing import Any, Protocol, cast
 
 from pydactyl import AsyncPterodactylClient  # type: ignore[import-untyped]
 
@@ -69,7 +69,7 @@ class AsyncPterodactylClientProtocol(Protocol):
         """Close the async client session."""
 
 
-ClientContextManager: TypeAlias = AbstractAsyncContextManager[AsyncPterodactylClientProtocol]
+type ClientContextManager = AbstractAsyncContextManager[AsyncPterodactylClientProtocol]
 
 
 class ClientFactory(Protocol):

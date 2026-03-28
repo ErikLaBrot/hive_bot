@@ -346,7 +346,6 @@ def _format_action_denied_message(result: ServerActionDenied) -> str:
             f"{result.remaining_memory_mib} MiB)."
         )
     if result.reason == "not-running":
-        assert result.server is not None
         return f"{label} is not running; use `/server start` instead."
 
     message = f"Unsupported action denial reason: {result.reason!r}"

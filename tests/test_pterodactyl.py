@@ -956,6 +956,25 @@ def test_start_server_returns_panel_unavailable_when_power_request_fails() -> No
     assert servers_api.power_actions == [("alpha-1", "start")]
 
 
+def test_start_server_treats_unknown_state_as_stopped() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state=None,
+                memory_limit_mib=1024,
+            )
+        ]
+    )
+
+    result = asyncio.run(bridge.start_server("alpha"))
+
+    assert isinstance(result, ServerActionAccepted)
+    assert result.server.state is None
+    assert servers_api.power_actions == [("alpha-1", "start")]
+
+
 def test_stop_server_accepts_when_target_is_running() -> None:
     bridge, servers_api = build_bridge(
         list_result=[

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 from pydactyl.exceptions import PydactylError  # type: ignore[import-untyped]
@@ -111,7 +111,7 @@ class PterodactylBridge:
         )
         has_complete_memory_data = not missing_memory_servers
         consumed_memory_mib = (
-            sum(server.memory_limit_mib or 0 for server in running_servers)
+            sum(cast(int, server.memory_limit_mib) for server in running_servers)
             if has_complete_memory_data
             else None
         )

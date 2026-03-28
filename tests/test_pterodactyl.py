@@ -108,7 +108,12 @@ def build_bridge(
         utilization_by_identifier=utilization_by_identifier,
     )
 
-    def fake_client_factory(config: PterodactylConfig) -> FakeClientContext:
+    def fake_client_factory(
+        config: PterodactylConfig,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> FakeClientContext:
+        assert logger is None
         assert config == PterodactylConfig(
             panel_url="https://panel.example.com",
             api_key="ptlc_test",
@@ -238,9 +243,7 @@ def test_discover_servers_accepts_plain_list_results_and_uses_fallback_values() 
     result = asyncio.run(bridge.discover_servers())
 
     assert isinstance(result, DiscoveredServers)
-    assert result.servers == (
-        result.servers[0],
-    )
+    assert len(result.servers) == 1
     assert result.servers[0].name == "unknown"
     assert result.servers[0].identifier == "unknown"
     assert result.servers[0].uuid is None

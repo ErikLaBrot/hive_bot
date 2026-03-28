@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, cast
 
@@ -67,7 +67,18 @@ class AsyncPterodactylClientProtocol(Protocol):
 
 
 type ClientContextManager = AbstractAsyncContextManager[AsyncPterodactylClientProtocol]
-type ClientFactory = Callable[[PterodactylConfig], ClientContextManager]
+
+
+class ClientFactory(Protocol):
+    """Callable interface for constructing short-lived Pterodactyl clients."""
+
+    def __call__(
+        self,
+        config: PterodactylConfig,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> ClientContextManager:
+        """Create an async client context manager for the provided config."""
 
 
 def create_client(

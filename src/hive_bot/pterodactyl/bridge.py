@@ -524,10 +524,9 @@ class PterodactylBridge:
                     last_state=last_state,
                 )
             if activity.seconds_since_event(now) >= MONITOR_INACTIVITY_TIMEOUT_SECONDS:
-                return ActionMonitorTimeout(
-                    action=action,
-                    server=server,
-                    timeout_kind="inactivity-timeout",
+                return await self._handle_inactivity_timeout(
+                    client,
+                    accepted_result=accepted_result,
                     last_state=last_state,
                 )
 
@@ -568,6 +567,44 @@ class PterodactylBridge:
             if sleep_seconds <= 0:
                 continue
             await asyncio.sleep(sleep_seconds)
+
+    async def _handle_inactivity_timeout(
+        self,
+        client: AsyncPterodactylClientProtocol,
+        *,
+        accepted_result: ServerActionAccepted,
+        last_state: str | None,
+    ) -> ActionMonitorResult:
+        action = accepted_result.action
+        server = accepted_result.server
+
+        # The websocket is tied to the current server process, so a clean stop
+        # can legitimately make it go quiet. Double-check the panel once before
+        # declaring the action unconfirmed.
+        if action == "stop":
+            try:
+                current_state = await self._get_live_state_in_session(
+                    client,
+                    server.identifier,
+                    require_state=False,
+                )
+            except Exception:
+                current_state = last_state
+            if _is_offline_state(current_state):
+                assert current_state is not None
+                return ActionMonitorSuccess(
+                    action=action,
+                    server=_replace_server_state(server, current_state=current_state),
+                    final_state=current_state,
+                )
+            last_state = current_state if current_state is not None else last_state
+
+        return ActionMonitorTimeout(
+            action=action,
+            server=server,
+            timeout_kind="inactivity-timeout",
+            last_state=last_state,
+        )
 
     def _parse_server(self, payload: dict[str, Any]) -> DiscoveredServer:
         attributes = _coerce_attributes(payload)

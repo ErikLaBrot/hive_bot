@@ -1643,6 +1643,122 @@ def test_monitor_action_returns_timeout_when_websocket_goes_quiet(
     )
 
 
+def test_monitor_action_treats_quiet_stop_websocket_as_success_when_panel_reports_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.1)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "stopping"},
+                {"current_state": "offline"},
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": []},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="stop",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorSuccess)
+    assert result.final_state == "offline"
+
+
+def test_monitor_action_times_out_when_quiet_stop_websocket_still_reports_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.1)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "stopping"},
+                {"current_state": "stopping"},
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": []},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="stop",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorTimeout)
+    assert result.timeout_kind == "inactivity-timeout"
+    assert result.last_state == "stopping"
+
+
+def test_monitor_action_times_out_when_quiet_stop_final_status_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.1)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "stopping"},
+                RuntimeError("status lookup failed"),
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": []},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="stop",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorTimeout)
+    assert result.timeout_kind == "inactivity-timeout"
+    assert result.last_state == "stopping"
+
+
 def test_monitor_action_returns_timeout_when_hard_deadline_is_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

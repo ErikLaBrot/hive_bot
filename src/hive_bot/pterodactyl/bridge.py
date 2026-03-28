@@ -137,16 +137,14 @@ class PterodactylBridge:
                         reason="already-running",
                     )
 
-                running_servers = tuple(
-                    server for server in discovered_servers if _is_running_state(server.state)
-                )
-                if len(running_servers) >= self._policy.max_running_servers:
+                budget_status = self._build_budget_status(discovered_servers)
+                if budget_status.running_server_count >= self._policy.max_running_servers:
                     return ServerActionDenied(
                         action="start",
                         query=query,
                         reason="max-running-servers",
                         server=target_server,
-                        running_server_count=len(running_servers),
+                        running_server_count=budget_status.running_server_count,
                         max_running_servers=self._policy.max_running_servers,
                     )
 
@@ -158,7 +156,6 @@ class PterodactylBridge:
                         server=target_server,
                     )
 
-                budget_status = self._build_budget_status(discovered_servers)
                 if not budget_status.has_complete_memory_data:
                     return ServerActionDenied(
                         action="start",

@@ -315,21 +315,23 @@ def _format_action_no_op_message(result: ServerActionNoOp) -> str:
 
 
 def _format_action_denied_message(result: ServerActionDenied) -> str:
-    label = _format_server_label(result.server)
     if result.reason == "max-running-servers":
         assert result.running_server_count is not None
         assert result.max_running_servers is not None
+        label = _format_server_label(result.server)
         return (
             f"Start denied for {label}: running server limit reached "
             f"({result.running_server_count}/{result.max_running_servers})."
         )
     if result.reason == "missing-target-memory-limit":
+        label = _format_server_label(result.server)
         return (
             f"Start denied for {label}: this server has no discoverable RAM limit, "
             "so the RAM budget cannot be enforced safely."
         )
     if result.reason == "missing-running-memory-limits":
         assert result.missing_memory_limit_servers
+        label = _format_server_label(result.server)
         missing = ", ".join(
             _format_server_label(server) for server in result.missing_memory_limit_servers
         )
@@ -340,12 +342,15 @@ def _format_action_denied_message(result: ServerActionDenied) -> str:
     if result.reason == "insufficient-ram-headroom":
         assert result.required_memory_mib is not None
         assert result.remaining_memory_mib is not None
+        label = _format_server_label(result.server)
         return (
             f"Start denied for {label}: RAM budget would be exceeded "
             f"(needs {result.required_memory_mib} MiB, remaining "
             f"{result.remaining_memory_mib} MiB)."
         )
     if result.reason == "not-running":
+        assert result.server is not None
+        label = _format_server_label(result.server)
         return f"{label} is not running; use `/server start` instead."
 
     message = f"Unsupported action denial reason: {result.reason!r}"

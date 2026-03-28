@@ -894,6 +894,25 @@ def test_format_action_denied_message_handles_insufficient_ram_headroom() -> Non
     )
 
 
+def test_format_action_denied_message_handles_not_running() -> None:
+    assert (
+        server_commands._format_action_denied_message(
+            ServerActionDenied(
+                action="restart",
+                query="alpha",
+                reason="not-running",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+        == "Alpha (`alpha-1`) is not running; use `/server start` instead."
+    )
+
+
 def test_format_action_denied_message_rejects_missing_running_limit_fields() -> None:
     with pytest.raises(AssertionError):
         server_commands._format_action_denied_message(
@@ -907,6 +926,17 @@ def test_format_action_denied_message_rejects_missing_running_limit_fields() -> 
                     state="offline",
                     memory_limit_mib=4096,
                 ),
+            )
+        )
+
+
+def test_format_action_denied_message_rejects_missing_not_running_server() -> None:
+    with pytest.raises(AssertionError):
+        server_commands._format_action_denied_message(
+            ServerActionDenied(
+                action="restart",
+                query="alpha",
+                reason="not-running",
             )
         )
 

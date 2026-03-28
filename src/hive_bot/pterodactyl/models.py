@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,11 +120,15 @@ class ServerActionDenied:
     missing_memory_limit_servers: tuple[DiscoveredServer, ...] = ()
 
 
-type DiscoverServersResult = DiscoveredServers | PanelUnavailable
-type ResolveServerResult = ResolvedServer | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
-type ServerStatusResult = ServerStatus | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
-type BudgetResult = BudgetStatus | PanelUnavailable
-type ActionResult = (
+DiscoverServersResult: TypeAlias = DiscoveredServers | PanelUnavailable
+ResolveServerResult: TypeAlias = (
+    ResolvedServer | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
+)
+ServerStatusResult: TypeAlias = (
+    ServerStatus | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
+)
+BudgetResult: TypeAlias = BudgetStatus | PanelUnavailable
+ActionResult: TypeAlias = (
     ServerActionAccepted
     | ServerActionNoOp
     | ServerActionDenied

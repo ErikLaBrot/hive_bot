@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any, cast
 
 import aiohttp
@@ -54,13 +55,10 @@ class PterodactylBridge:
 
         try:
             async with self._open_client() as client:
-                raw_items = await self._list_server_items(client)
+                servers = await self._discover_servers_in_session(client)
         except Exception as exc:
             return self._panel_unavailable("discover servers", exc)
 
-        servers = tuple(
-            sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key)
-        )
         return DiscoveredServers(servers=servers)
 
     async def resolve_server(self, query: str) -> ResolveServerResult:
@@ -77,10 +75,7 @@ class PterodactylBridge:
 
         try:
             async with self._open_client() as client:
-                raw_items = await self._list_server_items(client)
-                discovered_servers = tuple(
-                    sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key)
-                )
+                discovered_servers = await self._discover_servers_in_session(client)
                 resolve_result = _resolve_from_servers(query, discovered_servers)
                 if not isinstance(resolve_result, ResolvedServer):
                     return resolve_result
@@ -135,12 +130,25 @@ class PterodactylBridge:
     def _open_client(self) -> ClientContextManager:
         return self._client_factory(self._config)
 
+    async def _discover_servers_in_session(
+        self,
+        client: AsyncPterodactylClientProtocol,
+    ) -> tuple[DiscoveredServer, ...]:
+        raw_items = await self._list_server_items(client)
+        return tuple(sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key))
+
     async def _list_server_items(
         self,
         client: AsyncPterodactylClientProtocol,
     ) -> list[dict[str, Any]]:
         response = await client.client.servers.list_servers(params={"per_page": 100})
         if isinstance(response, list):
+            if len(response) >= 100:
+                self._logger.warning(
+                    "Received %s servers from a plain-list py-dactyl response; "
+                    "results may be truncated at the per-page limit",
+                    len(response),
+                )
             return response
 
         return await response.collect_async()
@@ -237,13 +245,9 @@ def _replace_server_state(
     *,
     current_state: str | None,
 ) -> DiscoveredServer:
-    return DiscoveredServer(
-        name=server.name,
-        identifier=server.identifier,
-        uuid=server.uuid,
-        internal_id=server.internal_id,
+    return replace(
+        server,
         state=current_state if current_state is not None else server.state,
-        memory_limit_mib=server.memory_limit_mib,
     )
 
 

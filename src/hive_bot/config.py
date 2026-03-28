@@ -72,7 +72,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             guild_id=_require_positive_int(config_data, ("discord", "guild_id")),
         ),
         pterodactyl=PterodactylConfig(
-            panel_url=_require_non_empty_string(config_data, ("pterodactyl", "panel_url")),
+            panel_url=_require_http_url(config_data, ("pterodactyl", "panel_url")),
             api_key=_require_non_empty_string(config_data, ("pterodactyl", "api_key")),
         ),
         policy=PolicyConfig(
@@ -111,6 +111,14 @@ def _require_non_empty_string(config_data: dict[str, object], path: tuple[str, .
         raise ConfigError(f"{dotted_path} must be a non-empty string")
 
     return normalized_value
+
+
+def _require_http_url(config_data: dict[str, object], path: tuple[str, ...]) -> str:
+    value = _require_non_empty_string(config_data, path)
+    dotted_path = ".".join(path)
+    if not value.startswith(("http://", "https://")):
+        raise ConfigError(f"{dotted_path} must start with http:// or https://")
+    return value
 
 
 def _require_positive_int(config_data: dict[str, object], path: tuple[str, ...]) -> int:

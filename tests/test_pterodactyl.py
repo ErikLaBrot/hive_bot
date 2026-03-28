@@ -113,7 +113,7 @@ def build_bridge(
         *,
         logger: logging.Logger | None = None,
     ) -> FakeClientContext:
-        assert logger is None
+        del logger
         assert config == PterodactylConfig(
             panel_url="https://panel.example.com",
             api_key="ptlc_test",
@@ -262,6 +262,29 @@ def test_discover_servers_returns_panel_unavailable_for_expected_api_errors(
 
     assert result == PanelUnavailable(operation="discover servers")
     assert "Pterodactyl panel unavailable while trying to discover servers" in caplog.text
+
+
+def test_discover_servers_warns_when_plain_list_response_hits_per_page_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge = build_bridge(
+        list_result=[
+            discovered_item(
+                name=f"Server {index}",
+                identifier=f"server-{index}",
+                state="running",
+                memory_limit_mib=1024,
+            )
+            for index in range(100)
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(bridge.discover_servers())
+
+    assert isinstance(result, DiscoveredServers)
+    assert len(result.servers) == 100
+    assert "results may be truncated at the per-page limit" in caplog.text
 
 
 @pytest.mark.parametrize(

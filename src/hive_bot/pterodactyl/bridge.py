@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import suppress
 from dataclasses import replace
 from typing import Any, cast
 
@@ -17,6 +19,11 @@ from hive_bot.pterodactyl.client import (
     create_client,
 )
 from hive_bot.pterodactyl.models import (
+    ActionMonitorError,
+    ActionMonitorResult,
+    ActionMonitorSuccess,
+    ActionMonitorTimeout,
+    ActionMonitorUnconfirmed,
     ActionResult,
     AmbiguousServerMatch,
     BudgetResult,
@@ -36,6 +43,9 @@ from hive_bot.pterodactyl.models import (
 )
 
 LOGGER = logging.getLogger(__name__)
+MONITOR_POLL_INTERVAL_SECONDS = 3.0
+MONITOR_INACTIVITY_TIMEOUT_SECONDS = 15.0
+MONITOR_HARD_TIMEOUT_SECONDS = 120.0
 
 
 class PterodactylBridge:
@@ -59,7 +69,10 @@ class PterodactylBridge:
 
         try:
             async with self._open_client() as client:
-                servers = await self._discover_servers_in_session(client)
+                servers = await self._discover_live_servers_in_session(
+                    client,
+                    tolerate_state_failures=True,
+                )
         except Exception as exc:
             return self._panel_unavailable("discover servers", exc)
 
@@ -108,11 +121,16 @@ class PterodactylBridge:
     async def get_budget_status(self) -> BudgetResult:
         """Compute current policy budget information from live discovery."""
 
-        discovered_result = await self.discover_servers()
-        if isinstance(discovered_result, PanelUnavailable):
-            return discovered_result
+        try:
+            async with self._open_client() as client:
+                live_servers = await self._discover_live_servers_in_session(
+                    client,
+                    tolerate_state_failures=True,
+                )
+        except Exception as exc:
+            return self._panel_unavailable("discover servers", exc)
 
-        return self._build_budget_status(discovered_result.servers)
+        return self._build_budget_status(live_servers)
 
     async def start_server(self, query: str) -> ActionResult:
         """Start a resolved server if policy checks allow it."""
@@ -120,11 +138,14 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
-                    discovered_servers = await self._discover_servers_in_session(client)
+                    live_servers = await self._discover_live_servers_in_session(
+                        client,
+                        tolerate_state_failures=False,
+                    )
                 except Exception as exc:
                     return self._panel_unavailable("discover servers", exc)
 
-                resolve_result = _resolve_from_servers(query, discovered_servers)
+                resolve_result = _resolve_from_servers(query, live_servers)
                 if not isinstance(resolve_result, ResolvedServer):
                     return resolve_result
 
@@ -137,7 +158,7 @@ class PterodactylBridge:
                         reason="already-running",
                     )
 
-                budget_status = self._build_budget_status(discovered_servers)
+                budget_status = self._build_budget_status(live_servers)
                 if budget_status.running_server_count >= self._policy.max_running_servers:
                     return ServerActionDenied(
                         action="start",
@@ -193,11 +214,14 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
-                    discovered_servers = await self._discover_servers_in_session(client)
+                    live_servers = await self._discover_live_servers_in_session(
+                        client,
+                        tolerate_state_failures=False,
+                    )
                 except Exception as exc:
                     return self._panel_unavailable("discover servers", exc)
 
-                resolve_result = _resolve_from_servers(query, discovered_servers)
+                resolve_result = _resolve_from_servers(query, live_servers)
                 if not isinstance(resolve_result, ResolvedServer):
                     return resolve_result
 
@@ -225,11 +249,14 @@ class PterodactylBridge:
         try:
             async with self._open_client() as client:
                 try:
-                    discovered_servers = await self._discover_servers_in_session(client)
+                    live_servers = await self._discover_live_servers_in_session(
+                        client,
+                        tolerate_state_failures=False,
+                    )
                 except Exception as exc:
                     return self._panel_unavailable("discover servers", exc)
 
-                resolve_result = _resolve_from_servers(query, discovered_servers)
+                resolve_result = _resolve_from_servers(query, live_servers)
                 if not isinstance(resolve_result, ResolvedServer):
                     return resolve_result
 
@@ -250,6 +277,75 @@ class PterodactylBridge:
                 )
         except Exception as exc:
             return self._panel_unavailable("restart server", exc)
+
+    async def monitor_action(self, accepted_result: ServerActionAccepted) -> ActionMonitorResult:
+        """Watch an accepted power action until success or manual handoff."""
+
+        server = accepted_result.server
+        action = accepted_result.action
+
+        try:
+            async with self._open_client() as client:
+                try:
+                    websocket = client.client.servers.get_websocket_client(server.identifier)
+                    await websocket.connect()
+                    await websocket.authenticate()
+                    await websocket.request_stats()
+                except Exception as exc:
+                    self._logger.warning(
+                        "Could not start websocket monitoring for %s (%s) after %s: %s",
+                        server.name,
+                        server.identifier,
+                        action,
+                        exc,
+                    )
+                    return ActionMonitorUnconfirmed(
+                        action=action,
+                        server=server,
+                        reason="websocket-setup-failed",
+                        last_state=server.state,
+                    )
+
+                activity = _WebsocketActivityTracker()
+                listener_task = asyncio.create_task(
+                    self._consume_websocket_events(websocket, activity=activity)
+                )
+                try:
+                    return await self._wait_for_terminal_action_state(
+                        client,
+                        accepted_result=accepted_result,
+                        activity=activity,
+                    )
+                except Exception as exc:
+                    self._logger.exception(
+                        "Unexpected monitoring failure after %s for %s (%s)",
+                        action,
+                        server.name,
+                        server.identifier,
+                    )
+                    return ActionMonitorError(
+                        action=action,
+                        server=server,
+                        reason=_exception_reason(exc),
+                    )
+                finally:
+                    listener_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await listener_task
+                    with suppress(Exception):
+                        await websocket.close()
+        except Exception as exc:
+            self._logger.exception(
+                "Unexpected monitor client failure after %s for %s (%s)",
+                action,
+                server.name,
+                server.identifier,
+            )
+            return ActionMonitorError(
+                action=action,
+                server=server,
+                reason=_exception_reason(exc),
+            )
 
     def _open_client(self) -> ClientContextManager:
         return self._client_factory(self._config)
@@ -290,6 +386,37 @@ class PterodactylBridge:
         raw_items = await self._list_server_items(client)
         return tuple(sorted((self._parse_server(item) for item in raw_items), key=_server_sort_key))
 
+    async def _discover_live_servers_in_session(
+        self,
+        client: AsyncPterodactylClientProtocol,
+        *,
+        tolerate_state_failures: bool,
+    ) -> tuple[DiscoveredServer, ...]:
+        discovered_servers = await self._discover_servers_in_session(client)
+        live_servers: list[DiscoveredServer] = []
+
+        for server in discovered_servers:
+            try:
+                current_state = await self._get_live_state_in_session(
+                    client,
+                    server.identifier,
+                    require_state=not tolerate_state_failures,
+                )
+            except Exception:
+                if not tolerate_state_failures:
+                    raise
+                self._logger.warning(
+                    "Could not fetch live state for %s (%s); showing unknown in inventory",
+                    server.name,
+                    server.identifier,
+                )
+                live_servers.append(replace(server, state=None))
+                continue
+
+            live_servers.append(_replace_server_state(server, current_state=current_state))
+
+        return tuple(live_servers)
+
     async def _list_server_items(
         self,
         client: AsyncPterodactylClientProtocol,
@@ -310,6 +437,97 @@ class PterodactylBridge:
             return response
 
         return await response.collect_async()
+
+    async def _get_live_state_in_session(
+        self,
+        client: AsyncPterodactylClientProtocol,
+        server_identifier: str,
+        *,
+        require_state: bool,
+    ) -> str | None:
+        utilization = await client.client.servers.get_server_utilization(server_identifier)
+        current_state = _read_optional_string(_coerce_attributes(utilization).get("current_state"))
+        if current_state is None and require_state:
+            raise RuntimeError(f"Missing live current_state for server {server_identifier}")
+        return current_state
+
+    async def _consume_websocket_events(
+        self,
+        websocket: Any,
+        *,
+        activity: _WebsocketActivityTracker,
+    ) -> None:
+        async for _event in websocket.listen():
+            activity.mark_event()
+
+    async def _wait_for_terminal_action_state(
+        self,
+        client: AsyncPterodactylClientProtocol,
+        *,
+        accepted_result: ServerActionAccepted,
+        activity: _WebsocketActivityTracker,
+    ) -> ActionMonitorResult:
+        action = accepted_result.action
+        server = accepted_result.server
+        last_state = server.state
+        restart_left_running = False
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
+
+        while True:
+            now = loop.time()
+            if now - start_time >= MONITOR_HARD_TIMEOUT_SECONDS:
+                return ActionMonitorTimeout(
+                    action=action,
+                    server=server,
+                    timeout_kind="hard-timeout",
+                    last_state=last_state,
+                )
+            if activity.seconds_since_event(now) >= MONITOR_INACTIVITY_TIMEOUT_SECONDS:
+                return ActionMonitorTimeout(
+                    action=action,
+                    server=server,
+                    timeout_kind="inactivity-timeout",
+                    last_state=last_state,
+                )
+
+            current_state = await self._get_live_state_in_session(
+                client,
+                server.identifier,
+                require_state=True,
+            )
+            assert current_state is not None
+            last_state = current_state
+            if action == "start" and _is_running_state(current_state):
+                return ActionMonitorSuccess(
+                    action=action,
+                    server=_replace_server_state(server, current_state=current_state),
+                    final_state=current_state,
+                )
+            if action == "stop" and _is_offline_state(current_state):
+                return ActionMonitorSuccess(
+                    action=action,
+                    server=_replace_server_state(server, current_state=current_state),
+                    final_state=current_state,
+                )
+            if action == "restart":
+                if not _is_running_state(current_state):
+                    restart_left_running = True
+                elif restart_left_running:
+                    return ActionMonitorSuccess(
+                        action=action,
+                        server=_replace_server_state(server, current_state=current_state),
+                        final_state=current_state,
+                    )
+
+            sleep_seconds = min(
+                MONITOR_POLL_INTERVAL_SECONDS,
+                MONITOR_HARD_TIMEOUT_SECONDS - (now - start_time),
+                MONITOR_INACTIVITY_TIMEOUT_SECONDS - activity.seconds_since_event(now),
+            )
+            if sleep_seconds <= 0:
+                continue
+            await asyncio.sleep(sleep_seconds)
 
     def _parse_server(self, payload: dict[str, Any]) -> DiscoveredServer:
         attributes = _coerce_attributes(payload)
@@ -450,5 +668,27 @@ def _server_sort_key(server: DiscoveredServer) -> tuple[str, str]:
     return (server.name.casefold(), server.identifier.casefold())
 
 
+class _WebsocketActivityTracker:
+    def __init__(self) -> None:
+        self._last_event_at = asyncio.get_running_loop().time()
+
+    def mark_event(self) -> None:
+        self._last_event_at = asyncio.get_running_loop().time()
+
+    def seconds_since_event(self, now: float) -> float:
+        return now - self._last_event_at
+
+
 def _is_running_state(state: str | None) -> bool:
     return state is not None and state.casefold() == "running"
+
+
+def _is_offline_state(state: str | None) -> bool:
+    return state is not None and state.casefold() == "offline"
+
+
+def _exception_reason(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return exc.__class__.__name__

@@ -100,6 +100,45 @@ class ServerActionNoOp:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionMonitorSuccess:
+    """A previously accepted power action reached its terminal success state."""
+
+    action: str
+    server: DiscoveredServer
+    final_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorTimeout:
+    """Completion monitoring timed out before the terminal state was confirmed."""
+
+    action: str
+    server: DiscoveredServer
+    timeout_kind: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorUnconfirmed:
+    """Completion could not be confirmed, but the original action was accepted."""
+
+    action: str
+    server: DiscoveredServer
+    reason: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionMonitorError:
+    """Unexpected monitoring failure after an accepted power action."""
+
+    action: str
+    server: DiscoveredServer
+    reason: str
+    last_state: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ServerActionDenied:
     """A power action was denied after validation or policy checks.
 
@@ -130,4 +169,10 @@ type ActionResult = (
     | ServerNotFound
     | AmbiguousServerMatch
     | PanelUnavailable
+)
+type ActionMonitorResult = (
+    ActionMonitorSuccess
+    | ActionMonitorTimeout
+    | ActionMonitorUnconfirmed
+    | ActionMonitorError
 )

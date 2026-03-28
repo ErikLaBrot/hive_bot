@@ -20,6 +20,10 @@ from hive_bot.commands.server import (
     handle_server_stop,
 )
 from hive_bot.pterodactyl import (
+    ActionMonitorError,
+    ActionMonitorSuccess,
+    ActionMonitorTimeout,
+    ActionMonitorUnconfirmed,
     ActionResult,
     AmbiguousServerMatch,
     BudgetStatus,
@@ -45,14 +49,27 @@ class FakeResponse:
         self.messages.append(message)
 
 
+class FakeFollowup:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.messages: list[str] = []
+        self.error = error
+
+    async def send(self, message: str) -> None:
+        if self.error is not None:
+            raise self.error
+        self.messages.append(message)
+
+
 class FakeInteraction:
     def __init__(
         self,
         *,
         user: Any | None = None,
         response_error: Exception | None = None,
+        followup_error: Exception | None = None,
     ) -> None:
         self.response = FakeResponse(error=response_error)
+        self.followup = FakeFollowup(error=followup_error)
         self.user = FakeUser() if user is None else user
 
 
@@ -101,6 +118,7 @@ class FakeBridge:
         start_result: ActionResult | None = None,
         stop_result: ActionResult | None = None,
         restart_result: ActionResult | None = None,
+        monitor_result: Any | None = None,
     ) -> None:
         self.discover_result = discover_result
         self.status_result = status_result
@@ -108,6 +126,7 @@ class FakeBridge:
         self.start_result = start_result
         self.stop_result = stop_result
         self.restart_result = restart_result
+        self.monitor_result = monitor_result
         self.calls: list[tuple[str, Any]] = []
 
     async def discover_servers(self) -> Any:
@@ -137,6 +156,11 @@ class FakeBridge:
         assert self.restart_result is not None
         return self.restart_result
 
+    async def monitor_action(self, accepted_result: ServerActionAccepted) -> Any:
+        self.calls.append(("monitor_action", accepted_result))
+        assert self.monitor_result is not None
+        return self.monitor_result
+
 
 def discovered_server(
     *,
@@ -153,6 +177,19 @@ def discovered_server(
         state=state,
         memory_limit_mib=memory_limit_mib,
     )
+
+
+def run_created_tasks_immediately(monkeypatch: pytest.MonkeyPatch) -> list[asyncio.Task[Any]]:
+    created_tasks: list[asyncio.Task[Any]] = []
+    original_create_task = asyncio.create_task
+
+    def fake_create_task(coro: Any) -> asyncio.Task[Any]:
+        task = original_create_task(coro)
+        created_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+    return created_tasks
 
 
 def test_handle_server_list_formats_discovered_servers() -> None:
@@ -180,11 +217,7 @@ def test_handle_server_list_formats_discovered_servers() -> None:
 
     assert bridge.calls == [("discover_servers", None)]
     assert interaction.response.messages == [
-        (
-            "Discoverable Pterodactyl servers:\n"
-            "- Alpha (`alpha-1`): running; RAM limit 4096 MiB\n"
-            "- Beta (`beta-1`): unknown; RAM limit unknown"
-        )
+        "Discoverable Pterodactyl servers:\n- Alpha: running\n- Beta: unknown"
     ]
 
 
@@ -479,8 +512,10 @@ def test_handle_server_budget_formats_no_running_servers() -> None:
 
 
 def test_handle_server_start_formats_acceptance_and_audits(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    created_tasks = run_created_tasks_immediately(monkeypatch)
     bridge = FakeBridge(
         start_result=ServerActionAccepted(
             action="start",
@@ -492,18 +527,35 @@ def test_handle_server_start_formats_acceptance_and_audits(
                 memory_limit_mib=4096,
             ),
         )
+        ,
+        monitor_result=ActionMonitorSuccess(
+            action="start",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+            final_state="running",
+        ),
     )
     interaction = FakeInteraction()
 
     with caplog.at_level(logging.INFO, logger="hive_bot.commands.server"):
         asyncio.run(handle_server_start(interaction, bridge=bridge, server="alpha"))
 
-    assert bridge.calls == [("start_server", "alpha")]
+    assert len(created_tasks) == 1
+    assert [call[0] for call in bridge.calls] == ["start_server", "monitor_action"]
     assert interaction.response.messages == ["Start request accepted for Alpha (`alpha-1`)."]
+    assert interaction.followup.messages == [
+        "Alpha (`alpha-1`) finished starting and is now running."
+    ]
     assert "command=/server start" in caplog.text
     assert "outcome=accepted" in caplog.text
     assert "resolved=Alpha (`alpha-1`)" in caplog.text
     assert "reason=accepted operation=-" in caplog.text
+    assert "Pterodactyl monitor audit" in caplog.text
+    assert "outcome=success" in caplog.text
 
 
 def test_handle_server_start_audits_before_response_failure(
@@ -558,9 +610,11 @@ def test_handle_server_start_formats_policy_denial_and_audits(
     assert interaction.response.messages == [
         "Start denied for Alpha (`alpha-1`): running server limit reached (2/2)."
     ]
+    assert bridge.calls == [("start_server", "alpha")]
     assert "outcome=denied" in caplog.text
     assert "reason=max-running-servers" in caplog.text
     assert "operation=-" in caplog.text
+    assert interaction.followup.messages == []
 
 
 def test_handle_server_stop_formats_no_op_and_audits(caplog: pytest.LogCaptureFixture) -> None:
@@ -583,10 +637,12 @@ def test_handle_server_stop_formats_no_op_and_audits(caplog: pytest.LogCaptureFi
         asyncio.run(handle_server_stop(interaction, bridge=bridge, server="alpha"))
 
     assert interaction.response.messages == ["Alpha (`alpha-1`) is already stopped."]
+    assert bridge.calls == [("stop_server", "alpha")]
     assert "command=/server stop" in caplog.text
     assert "outcome=no-op" in caplog.text
     assert "reason=already-stopped" in caplog.text
     assert "operation=-" in caplog.text
+    assert interaction.followup.messages == []
 
 
 def test_handle_server_restart_formats_denial_and_audits(
@@ -613,10 +669,133 @@ def test_handle_server_restart_formats_denial_and_audits(
     assert interaction.response.messages == [
         "Alpha (`alpha-1`) is not running; use `/server start` instead."
     ]
+    assert bridge.calls == [("restart_server", "alpha")]
     assert "command=/server restart" in caplog.text
     assert "outcome=denied" in caplog.text
     assert "reason=not-running" in caplog.text
     assert "operation=-" in caplog.text
+    assert interaction.followup.messages == []
+
+
+def test_handle_server_stop_sends_followup_after_monitor_success(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_created_tasks_immediately(monkeypatch)
+    bridge = FakeBridge(
+        stop_result=ServerActionAccepted(
+            action="stop",
+            query="alpha",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+        ),
+        monitor_result=ActionMonitorSuccess(
+            action="stop",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+            final_state="offline",
+        ),
+    )
+    interaction = FakeInteraction()
+
+    with caplog.at_level(logging.INFO, logger="hive_bot.commands.server"):
+        asyncio.run(handle_server_stop(interaction, bridge=bridge, server="alpha"))
+
+    assert interaction.response.messages == ["Stop request accepted for Alpha (`alpha-1`)."]
+    assert interaction.followup.messages == [
+        "Alpha (`alpha-1`) finished stopping and is now offline."
+    ]
+    assert "command=/server stop" in caplog.text
+    assert "Pterodactyl monitor audit" in caplog.text
+    assert "outcome=success" in caplog.text
+
+
+def test_handle_server_restart_sends_manual_check_followup_for_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_created_tasks_immediately(monkeypatch)
+    bridge = FakeBridge(
+        restart_result=ServerActionAccepted(
+            action="restart",
+            query="alpha",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+        ),
+        monitor_result=ActionMonitorTimeout(
+            action="restart",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="stopping",
+                memory_limit_mib=4096,
+            ),
+            timeout_kind="inactivity-timeout",
+            last_state="stopping",
+        ),
+    )
+    interaction = FakeInteraction()
+
+    with caplog.at_level(logging.INFO, logger="hive_bot.commands.server"):
+        asyncio.run(handle_server_restart(interaction, bridge=bridge, server="alpha"))
+
+    assert interaction.response.messages == ["Restart request accepted for Alpha (`alpha-1`)."]
+    assert interaction.followup.messages == [
+        "Restart request was accepted for Alpha (`alpha-1`), but completion could not be "
+        "confirmed before the monitoring timeout. Please check Pterodactyl manually."
+    ]
+    assert "command=/server restart" in caplog.text
+    assert "outcome=timeout" in caplog.text
+
+
+def test_handle_server_start_logs_followup_send_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_created_tasks_immediately(monkeypatch)
+    bridge = FakeBridge(
+        start_result=ServerActionAccepted(
+            action="start",
+            query="alpha",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+        ),
+        monitor_result=ActionMonitorUnconfirmed(
+            action="start",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+            reason="websocket-setup-failed",
+            last_state="offline",
+        ),
+    )
+    interaction = FakeInteraction(followup_error=RuntimeError("followup failed"))
+
+    with caplog.at_level(logging.ERROR, logger="hive_bot.commands.server"):
+        asyncio.run(handle_server_start(interaction, bridge=bridge, server="alpha"))
+
+    assert interaction.response.messages == ["Start request accepted for Alpha (`alpha-1`)."]
+    assert interaction.followup.messages == []
+    assert "Failed to send action follow-up" in caplog.text
 
 
 def test_handle_server_help_is_static() -> None:
@@ -638,7 +817,10 @@ def test_handle_server_help_is_static() -> None:
     ]
 
 
-def test_build_server_group_creates_named_subcommands() -> None:
+def test_build_server_group_creates_named_subcommands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_created_tasks_immediately(monkeypatch)
     bridge = FakeBridge(
         discover_result=DiscoveredServers(servers=()),
         status_result=ServerNotFound(query="ghost"),
@@ -651,6 +833,16 @@ def test_build_server_group_creates_named_subcommands() -> None:
                 state="offline",
                 memory_limit_mib=4096,
             ),
+        ),
+        monitor_result=ActionMonitorSuccess(
+            action="start",
+            server=discovered_server(
+                name="Alpha",
+                identifier="alpha-1",
+                state="running",
+                memory_limit_mib=4096,
+            ),
+            final_state="running",
         ),
         stop_result=ServerActionNoOp(
             action="stop",
@@ -712,6 +904,9 @@ def test_build_server_group_creates_named_subcommands() -> None:
     assert status_interaction.response.messages == ["No discoverable server matched `ghost`."]
     assert start_interaction.response.messages == [
         "Start request accepted for Alpha (`alpha-1`)."
+    ]
+    assert start_interaction.followup.messages == [
+        "Alpha (`alpha-1`) finished starting and is now running."
     ]
     assert stop_interaction.response.messages == ["Ghost (`ghost-1`) is already stopped."]
     assert restart_interaction.response.messages == [
@@ -996,6 +1191,10 @@ def test_format_server_label_returns_placeholder_when_server_is_missing() -> Non
     assert server_commands._format_server_label(None) == "the requested server"
 
 
+def test_format_memory_limit_handles_unknown() -> None:
+    assert server_commands._format_memory_limit(None) == "unknown"
+
+
 def test_resolved_server_for_result_returns_none_for_unresolved_results() -> None:
     assert (
         server_commands._resolved_server_for_result(PanelUnavailable(operation="start server"))
@@ -1036,3 +1235,122 @@ def test_action_outcome_fields_cover_unresolved_results() -> None:
 def test_action_outcome_fields_rejects_unsupported_type() -> None:
     with pytest.raises(AssertionError, match="Unsupported action result"):
         server_commands._action_outcome_fields(cast(Any, object()))
+
+
+def test_action_monitor_outcome_fields_cover_all_monitor_results() -> None:
+    server = discovered_server(
+        name="Alpha",
+        identifier="alpha-1",
+        state="running",
+        memory_limit_mib=4096,
+    )
+
+    assert server_commands._action_monitor_outcome_fields(
+        ActionMonitorSuccess(
+            action="start",
+            server=server,
+            final_state="running",
+        )
+    ) == ("success", "running", "running")
+    assert server_commands._action_monitor_outcome_fields(
+        ActionMonitorTimeout(
+            action="start",
+            server=server,
+            timeout_kind="inactivity-timeout",
+            last_state="starting",
+        )
+    ) == ("timeout", "inactivity-timeout", "starting")
+    assert server_commands._action_monitor_outcome_fields(
+        ActionMonitorUnconfirmed(
+            action="start",
+            server=server,
+            reason="websocket-setup-failed",
+            last_state="offline",
+        )
+    ) == ("unconfirmed", "websocket-setup-failed", "offline")
+    assert server_commands._action_monitor_outcome_fields(
+        ActionMonitorError(
+            action="start",
+            server=server,
+            reason="boom",
+            last_state="offline",
+        )
+    ) == ("monitor-error", "boom", "offline")
+
+
+def test_action_monitor_outcome_fields_rejects_unsupported_type() -> None:
+    with pytest.raises(AssertionError, match="Unsupported action monitor result"):
+        server_commands._action_monitor_outcome_fields(cast(Any, object()))
+
+
+def test_format_action_monitor_result_covers_manual_check_and_error_paths() -> None:
+    server = discovered_server(
+        name="Alpha",
+        identifier="alpha-1",
+        state="offline",
+        memory_limit_mib=4096,
+    )
+
+    assert (
+        server_commands._format_action_monitor_result(
+            ActionMonitorUnconfirmed(
+                action="start",
+                server=server,
+                reason="websocket-setup-failed",
+                last_state="offline",
+            )
+        )
+        == "Start request was accepted for Alpha (`alpha-1`), but completion could not be "
+        "confirmed automatically. Please check Pterodactyl manually."
+    )
+    assert (
+        server_commands._format_action_monitor_result(
+            ActionMonitorError(
+                action="start",
+                server=server,
+                reason="boom",
+                last_state="offline",
+            )
+        )
+        == "Start request was accepted for Alpha (`alpha-1`), but completion monitoring "
+        "hit an unexpected error. Please check Pterodactyl manually."
+    )
+
+
+def test_format_action_monitor_result_handles_restart_success() -> None:
+    assert (
+        server_commands._format_action_monitor_result(
+            ActionMonitorSuccess(
+                action="restart",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+                final_state="running",
+            )
+        )
+        == "Alpha (`alpha-1`) finished restarting and is now running."
+    )
+
+
+def test_format_action_monitor_result_rejects_unknown_success_action() -> None:
+    with pytest.raises(AssertionError, match="Unsupported monitor success action"):
+        server_commands._format_action_monitor_result(
+            ActionMonitorSuccess(
+                action="mystery",
+                server=discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+                final_state="running",
+            )
+        )
+
+
+def test_format_action_monitor_result_rejects_unsupported_type() -> None:
+    with pytest.raises(AssertionError, match="Unsupported action monitor result"):
+        server_commands._format_action_monitor_result(cast(Any, object()))

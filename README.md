@@ -77,7 +77,7 @@ Issue `#13` introduces a shared bridge in `src/hive_bot/pterodactyl/` that uses
 `py-dactyl` and fresh panel discovery as the source of truth. The bridge now
 supports:
 
-- live server discovery
+- live server discovery with request-scoped state enrichment
 - exact server resolution by name or identifier
 - current status lookup
 - policy budget summaries based on discovered RAM limits
@@ -103,18 +103,31 @@ invocation time, then format safe Discord responses for success, not-found,
 ambiguous-match, partial-budget, policy denial, no-op, and panel-unreachable
 results.
 
+`/server list` now keeps the output intentionally small:
+
+- one line per discoverable server
+- server name
+- live current status when it can be confirmed
+- `unknown` for an individual server if that server's live state lookup fails
+
 The power commands are intentionally conservative:
 
 - `/server start` denies the request if the bot would exceed
   `max_running_servers`, exceed `max_total_ram_gb`, or cannot compute RAM
   safety confidently because the target or currently running discovered servers
   have unknown RAM limits.
-- `/server stop` only acts on servers that discovery shows as running.
-- `/server restart` only acts on servers that discovery shows as running and
+- `/server stop` only acts on servers that live state enrichment shows as
+  running.
+- `/server restart` only acts on servers that live state enrichment shows as
+  running and
   never behaves like an implicit start.
 - every `/server start`, `/server stop`, and `/server restart` attempt emits an
   audit log entry with the Discord user, query, resolved server, outcome, and
   denial reason when applicable.
+- accepted `/server start`, `/server stop`, and `/server restart` commands send
+  an immediate accepted response first, then a follow-up message after
+  websocket-plus-poll monitoring confirms success or gives up and tells a human
+  to check the panel manually.
 
 ## Quality Checks
 
@@ -155,6 +168,8 @@ When the bot connects successfully, it will:
    return live Pterodactyl-backed responses for the configured bot user.
 8. Verify `/server start <server>`, `/server stop <server>`, and
    `/server restart <server>` return clean accepted, denied, or no-op
-   responses based on live discovery and policy limits.
+   responses based on live discovery and policy limits, then send a follow-up
+   completion message for accepted actions.
 9. Verify the bot logs an audit entry for each `/server start`, `/server stop`,
-   and `/server restart` attempt.
+   and `/server restart` attempt, plus a second monitor audit entry for each
+   accepted action follow-up.

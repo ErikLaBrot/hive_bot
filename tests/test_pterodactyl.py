@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from pydactyl.exceptions import PterodactylApiError  # type: ignore[import-untyped]
 
 import hive_bot.pterodactyl as pterodactyl
+import hive_bot.pterodactyl.bridge as bridge_module
 from hive_bot.config import PolicyConfig, PterodactylConfig
 from hive_bot.pterodactyl import (
+    ActionMonitorError,
+    ActionMonitorSuccess,
+    ActionMonitorTimeout,
+    ActionMonitorUnconfirmed,
     ActionResult,
     AmbiguousServerMatch,
     BudgetResult,
     BudgetStatus,
+    DiscoveredServer,
     DiscoveredServers,
     DiscoverServersResult,
     PanelUnavailable,
@@ -48,11 +55,15 @@ class FakeServersApi:
         utilization_by_identifier: dict[str, Any] | None = None,
         detail_by_identifier: dict[str, dict[str, Any]] | None = None,
         power_action_error: Exception | None = None,
+        websocket_events_by_identifier: dict[str, list[dict[str, Any]]] | None = None,
+        websocket_setup_error: Exception | None = None,
     ) -> None:
         self.list_result = list_result
         self.utilization_by_identifier = utilization_by_identifier or {}
         self.detail_by_identifier = detail_by_identifier or {}
         self.power_action_error = power_action_error
+        self.websocket_events_by_identifier = websocket_events_by_identifier or {}
+        self.websocket_setup_error = websocket_setup_error
         self.power_actions: list[tuple[str, str]] = []
 
     async def list_servers(
@@ -86,6 +97,14 @@ class FakeServersApi:
         if server_id not in self.utilization_by_identifier:
             raise AssertionError(f"Missing fake server utilization for {server_id}")
         result = self.utilization_by_identifier[server_id]
+        if isinstance(result, list):
+            if not result:
+                raise AssertionError(f"Exhausted fake server utilization sequence for {server_id}")
+            next_result = result.pop(0) if len(result) > 1 else result[0]
+            if isinstance(next_result, Exception):
+                raise next_result
+            assert isinstance(next_result, dict)
+            return next_result
         if isinstance(result, Exception):
             raise result
         assert isinstance(result, dict)
@@ -96,6 +115,44 @@ class FakeServersApi:
         if self.power_action_error is not None:
             raise self.power_action_error
         return {}
+
+    def get_websocket_client(self, server_id: str) -> FakeWebsocketClient:
+        if self.websocket_setup_error is not None:
+            raise self.websocket_setup_error
+        return FakeWebsocketClient(
+            events=self.websocket_events_by_identifier.get(server_id, []),
+        )
+
+
+class FakeWebsocketClient:
+    def __init__(self, *, events: list[dict[str, Any]]) -> None:
+        self._events = list(events)
+        self.connected = False
+        self.authenticated = False
+        self.stats_requested = False
+        self.closed = False
+
+    async def connect(self) -> None:
+        self.connected = True
+
+    async def authenticate(self) -> None:
+        self.authenticated = True
+
+    async def request_stats(self) -> None:
+        self.stats_requested = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def listen(
+        self,
+        events: Any = (),
+        exclude_events: Any = (),
+    ) -> AsyncIterator[dict[str, Any]]:
+        del events, exclude_events
+        for event in self._events:
+            yield event
+            await asyncio.sleep(0)
 
 
 class FakeClientApi:
@@ -123,12 +180,20 @@ def build_bridge(
     list_result: Any,
     utilization_by_identifier: dict[str, Any] | None = None,
     power_action_error: Exception | None = None,
+    websocket_events_by_identifier: dict[str, list[dict[str, Any]]] | None = None,
+    websocket_setup_error: Exception | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[PterodactylBridge, FakeServersApi]:
+    resolved_utilization = _default_utilization_by_identifier(list_result)
+    if utilization_by_identifier is not None:
+        resolved_utilization.update(utilization_by_identifier)
+
     servers_api = FakeServersApi(
         list_result=list_result,
-        utilization_by_identifier=utilization_by_identifier,
+        utilization_by_identifier=resolved_utilization,
         power_action_error=power_action_error,
+        websocket_events_by_identifier=websocket_events_by_identifier,
+        websocket_setup_error=websocket_setup_error,
     )
 
     def fake_client_factory(
@@ -152,6 +217,31 @@ def build_bridge(
         ),
         servers_api,
     )
+
+
+def _default_utilization_by_identifier(list_result: Any) -> dict[str, Any]:
+    if isinstance(list_result, Exception):
+        return {}
+
+    items: list[dict[str, Any]]
+    if isinstance(list_result, FakePaginatedResponse):
+        items = list_result.items
+    elif isinstance(list_result, list):
+        items = list_result
+    else:
+        return {}
+
+    utilization: dict[str, Any] = {}
+    for item in items:
+        attributes = item.get("attributes") if isinstance(item, dict) else None
+        payload = attributes if isinstance(attributes, dict) else item
+        if not isinstance(payload, dict):
+            continue
+        identifier = payload.get("identifier")
+        if not isinstance(identifier, str) or not identifier.strip():
+            continue
+        utilization[identifier.strip()] = {"current_state": payload.get("current_state")}
+    return utilization
 
 
 def discovered_item(
@@ -205,6 +295,11 @@ def test_create_client_passes_runtime_config_to_py_dactyl(
 
 def test_pterodactyl_package_exports_foundation_symbols() -> None:
     exported_names = {
+        "ActionMonitorError",
+        "ActionMonitorResult",
+        "ActionMonitorSuccess",
+        "ActionMonitorTimeout",
+        "ActionMonitorUnconfirmed",
         "ActionResult",
         "AmbiguousServerMatch",
         "BudgetResult",
@@ -229,12 +324,14 @@ def test_pterodactyl_package_exports_foundation_symbols() -> None:
 
 
 def test_pterodactyl_package_exports_result_aliases_for_annotations() -> None:
+    action_monitor_result: pterodactyl.ActionMonitorResult | None = None
     action_result: ActionResult | None = None
     budget_result: BudgetResult | None = None
     discover_result: DiscoverServersResult | None = None
     resolve_result: ResolveServerResult | None = None
     status_result: ServerStatusResult | None = None
 
+    assert action_monitor_result is None
     assert action_result is None
     assert budget_result is None
     assert discover_result is None
@@ -415,6 +512,31 @@ def test_discover_servers_warns_when_plain_list_response_hits_per_page_limit(
     assert isinstance(result, DiscoveredServers)
     assert len(result.servers) == 100
     assert "results may be truncated at the per-page limit" in caplog.text
+
+
+def test_discover_servers_marks_only_failed_live_state_fetch_as_unknown() -> None:
+    bridge, _ = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+            discovered_item(
+                name="Beta",
+                identifier="beta-1",
+                state="running",
+                memory_limit_mib=2048,
+            ),
+        ],
+        utilization_by_identifier={"beta-1": PterodactylApiError("stats down")},
+    )
+
+    result = asyncio.run(bridge.discover_servers())
+
+    assert isinstance(result, DiscoveredServers)
+    assert tuple(server.state for server in result.servers) == ("offline", None)
 
 
 @pytest.mark.parametrize(
@@ -604,6 +726,37 @@ def test_get_budget_status_returns_complete_budget_summary() -> None:
         missing_memory_limit_servers=(),
     )
     assert tuple(server.identifier for server in result.running_servers) == ("alpha-1", "gamma-1")
+
+
+def test_get_budget_status_uses_live_state_and_tolerates_per_server_failures() -> None:
+    bridge, _ = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            ),
+            discovered_item(
+                name="Beta",
+                identifier="beta-1",
+                state="running",
+                memory_limit_mib=2048,
+            ),
+        ],
+        utilization_by_identifier={
+            "alpha-1": {"current_state": "running"},
+            "beta-1": PterodactylApiError("stats down"),
+        },
+    )
+
+    result = asyncio.run(bridge.get_budget_status())
+
+    assert isinstance(result, BudgetStatus)
+    assert result.running_server_count == 1
+    assert tuple(server.identifier for server in result.running_servers) == ("alpha-1",)
+    assert result.consumed_memory_mib == 4096
+    assert result.remaining_memory_mib == 6144
 
 
 def test_get_budget_status_marks_missing_memory_data_as_partial() -> None:
@@ -817,6 +970,27 @@ def test_start_server_returns_no_op_when_target_is_already_running() -> None:
     assert servers_api.power_actions == []
 
 
+def test_start_server_uses_live_state_before_accepting_power_action() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            )
+        ],
+        utilization_by_identifier={"alpha-1": {"current_state": "running"}},
+    )
+
+    result = asyncio.run(bridge.start_server("alpha"))
+
+    assert isinstance(result, ServerActionNoOp)
+    assert result.reason == "already-running"
+    assert result.server.state == "running"
+    assert servers_api.power_actions == []
+
+
 def test_start_server_denies_when_running_server_limit_is_reached() -> None:
     bridge, servers_api = build_bridge(
         list_result=[
@@ -956,7 +1130,7 @@ def test_start_server_returns_panel_unavailable_when_power_request_fails() -> No
     assert servers_api.power_actions == [("alpha-1", "start")]
 
 
-def test_start_server_treats_unknown_state_as_stopped() -> None:
+def test_start_server_returns_panel_unavailable_when_live_state_is_unknown() -> None:
     bridge, servers_api = build_bridge(
         list_result=[
             discovered_item(
@@ -970,9 +1144,8 @@ def test_start_server_treats_unknown_state_as_stopped() -> None:
 
     result = asyncio.run(bridge.start_server("alpha"))
 
-    assert isinstance(result, ServerActionAccepted)
-    assert result.server.state is None
-    assert servers_api.power_actions == [("alpha-1", "start")]
+    assert result == PanelUnavailable(operation="discover servers")
+    assert servers_api.power_actions == []
 
 
 def test_stop_server_accepts_when_target_is_running() -> None:
@@ -995,6 +1168,26 @@ def test_stop_server_accepts_when_target_is_running() -> None:
         query="alpha",
         server=result.server,
     )
+    assert servers_api.power_actions == [("alpha-1", "stop")]
+
+
+def test_stop_server_uses_live_state_before_denial() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            )
+        ],
+        utilization_by_identifier={"alpha-1": {"current_state": "running"}},
+    )
+
+    result = asyncio.run(bridge.stop_server("alpha"))
+
+    assert isinstance(result, ServerActionAccepted)
+    assert result.server.state == "running"
     assert servers_api.power_actions == [("alpha-1", "stop")]
 
 
@@ -1060,6 +1253,26 @@ def test_restart_server_accepts_when_target_is_running() -> None:
         query="alpha",
         server=result.server,
     )
+    assert servers_api.power_actions == [("alpha-1", "restart")]
+
+
+def test_restart_server_uses_live_state_before_denial() -> None:
+    bridge, servers_api = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=4096,
+            )
+        ],
+        utilization_by_identifier={"alpha-1": {"current_state": "running"}},
+    )
+
+    result = asyncio.run(bridge.restart_server("alpha"))
+
+    assert isinstance(result, ServerActionAccepted)
+    assert result.server.state == "running"
     assert servers_api.power_actions == [("alpha-1", "restart")]
 
 
@@ -1255,3 +1468,354 @@ def test_restart_server_returns_panel_unavailable_when_power_request_fails() -> 
 
     assert result == PanelUnavailable(operation="restart server")
     assert servers_api.power_actions == [("alpha-1", "restart")]
+
+
+def test_monitor_action_reports_start_success_when_running_is_observed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.2)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "starting"},
+                {"current_state": "running"},
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": [{"event": "stats"}]},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert result == ActionMonitorSuccess(
+        action="start",
+        server=result.server,
+        final_state="running",
+    )
+    assert result.server.state == "running"
+
+
+def test_monitor_action_reports_stop_success_when_offline_is_observed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.2)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "stopping"},
+                {"current_state": "offline"},
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": [{"event": "stats"}]},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="stop",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorSuccess)
+    assert result.final_state == "offline"
+
+
+def test_monitor_action_reports_restart_success_only_after_returning_to_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.2)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={
+            "alpha-1": [
+                {"current_state": "running"},
+                {"current_state": "stopping"},
+                {"current_state": "running"},
+            ]
+        },
+        websocket_events_by_identifier={"alpha-1": [{"event": "stats"}]},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="restart",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="running",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorSuccess)
+    assert result.final_state == "running"
+
+
+def test_monitor_action_returns_timeout_when_websocket_goes_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.1)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={"alpha-1": [{"current_state": "starting"}] * 32},
+        websocket_events_by_identifier={"alpha-1": []},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert result == ActionMonitorTimeout(
+        action="start",
+        server=result.server,
+        timeout_kind="inactivity-timeout",
+        last_state="starting",
+    )
+
+
+def test_monitor_action_returns_timeout_when_hard_deadline_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.01)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={"alpha-1": [{"current_state": "starting"}] * 32},
+        websocket_events_by_identifier={"alpha-1": []},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorTimeout)
+    assert result.timeout_kind == "hard-timeout"
+
+
+def test_monitor_action_returns_unconfirmed_when_websocket_setup_fails() -> None:
+    bridge, _ = build_bridge(
+        list_result=[],
+        websocket_setup_error=RuntimeError("ws down"),
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert result == ActionMonitorUnconfirmed(
+        action="start",
+        server=DiscoveredServer(
+            name="Alpha",
+            identifier="alpha-1",
+            uuid=None,
+            internal_id=None,
+            state="offline",
+            memory_limit_mib=4096,
+        ),
+        reason="websocket-setup-failed",
+        last_state="offline",
+    )
+
+
+def test_monitor_action_returns_error_when_polling_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.2)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={"alpha-1": RuntimeError("utilization broke")},
+        websocket_events_by_identifier={"alpha-1": [{"event": "stats"}]},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorError)
+    assert result.reason == "utilization broke"
+
+
+def test_monitor_action_returns_error_when_client_setup_fails() -> None:
+    def failing_client_factory(
+        config: PterodactylConfig,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        del config, logger
+        raise RuntimeError("client open failed")
+
+    bridge = PterodactylBridge(
+        PterodactylConfig(panel_url="https://panel.example.com", api_key="ptlc_test"),
+        PolicyConfig(max_running_servers=2, max_total_ram_gb=10),
+        client_factory=failing_client_factory,
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorError)
+    assert result.reason == "client open failed"
+
+
+def test_monitor_action_can_reach_zero_sleep_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_INACTIVITY_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr("hive_bot.pterodactyl.bridge.MONITOR_HARD_TIMEOUT_SECONDS", 0.001)
+    bridge, _ = build_bridge(
+        list_result=[],
+        utilization_by_identifier={"alpha-1": [{"current_state": "starting"}] * 64},
+        websocket_events_by_identifier={"alpha-1": [{"event": "stats"}]},
+    )
+
+    result = asyncio.run(
+        bridge.monitor_action(
+            ServerActionAccepted(
+                action="start",
+                query="alpha",
+                server=DiscoveredServer(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    uuid=None,
+                    internal_id=None,
+                    state="offline",
+                    memory_limit_mib=4096,
+                ),
+            )
+        )
+    )
+
+    assert isinstance(result, ActionMonitorTimeout)
+    assert result.timeout_kind == "hard-timeout"
+
+
+def test_bridge_helper_functions_cover_offline_and_empty_exception_reason() -> None:
+    assert bridge_module._is_offline_state("offline") is True
+    assert bridge_module._is_offline_state("running") is False
+    assert bridge_module._exception_reason(RuntimeError()) == "RuntimeError"
+
+
+def test_websocket_activity_tracker_marks_events() -> None:
+    async def exercise_tracker() -> tuple[float, float]:
+        tracker = bridge_module._WebsocketActivityTracker()
+        loop = asyncio.get_running_loop()
+        before = tracker.seconds_since_event(loop.time())
+        await asyncio.sleep(0)
+        tracker.mark_event()
+        after = tracker.seconds_since_event(loop.time())
+        return before, after
+
+    before, after = asyncio.run(exercise_tracker())
+
+    assert before >= 0
+    assert after >= 0

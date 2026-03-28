@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Protocol
 
 from hive_bot.pterodactyl import (
+    ActionMonitorError,
+    ActionMonitorResult,
+    ActionMonitorSuccess,
+    ActionMonitorTimeout,
+    ActionMonitorUnconfirmed,
     ActionResult,
     AmbiguousServerMatch,
     BudgetResult,
@@ -45,6 +51,9 @@ class ServerCommandBridge(Protocol):
 
     async def restart_server(self, query: str) -> ActionResult:
         """Attempt to restart a discoverable server."""
+
+    async def monitor_action(self, accepted_result: ServerActionAccepted) -> ActionMonitorResult:
+        """Monitor a previously accepted power action to completion."""
 
 
 async def handle_server_list(interaction: Any, *, bridge: ServerCommandBridge) -> None:
@@ -87,9 +96,13 @@ async def handle_server_start(
 ) -> None:
     """Respond to `/server start`."""
 
-    result = await bridge.start_server(server)
-    _audit_action_result(interaction, action="start", query=server, result=result)
-    await interaction.response.send_message(_format_action_result(result))
+    await _handle_power_command(
+        interaction,
+        action="start",
+        query=server,
+        result=await bridge.start_server(server),
+        bridge=bridge,
+    )
 
 
 async def handle_server_stop(
@@ -100,9 +113,13 @@ async def handle_server_stop(
 ) -> None:
     """Respond to `/server stop`."""
 
-    result = await bridge.stop_server(server)
-    _audit_action_result(interaction, action="stop", query=server, result=result)
-    await interaction.response.send_message(_format_action_result(result))
+    await _handle_power_command(
+        interaction,
+        action="stop",
+        query=server,
+        result=await bridge.stop_server(server),
+        bridge=bridge,
+    )
 
 
 async def handle_server_restart(
@@ -113,9 +130,13 @@ async def handle_server_restart(
 ) -> None:
     """Respond to `/server restart`."""
 
-    result = await bridge.restart_server(server)
-    _audit_action_result(interaction, action="restart", query=server, result=result)
-    await interaction.response.send_message(_format_action_result(result))
+    await _handle_power_command(
+        interaction,
+        action="restart",
+        query=server,
+        result=await bridge.restart_server(server),
+        bridge=bridge,
+    )
 
 
 def build_server_group(*, app_commands_module: Any, bridge: ServerCommandBridge) -> Any:
@@ -236,8 +257,7 @@ def _format_action_result(result: ActionResult) -> str:
 
 def _format_server_summary_line(server: DiscoveredServer) -> str:
     state = server.state if server.state is not None else "unknown"
-    memory_limit = _format_memory_limit(server.memory_limit_mib)
-    return f"- {server.name} (`{server.identifier}`): {state}; RAM limit {memory_limit}"
+    return f"- {server.name}: {state}"
 
 
 def _format_server_status_message(server: DiscoveredServer) -> str:
@@ -390,6 +410,30 @@ def _audit_action_result(
     )
 
 
+def _audit_action_monitor_result(
+    interaction: Any,
+    *,
+    accepted_result: ServerActionAccepted,
+    result: ActionMonitorResult,
+) -> None:
+    user = getattr(interaction, "user", None)
+    user_id = getattr(user, "id", "unknown")
+    user_name = str(user) if user is not None else "unknown-user"
+    outcome, reason, last_state = _action_monitor_outcome_fields(result)
+    LOGGER.info(
+        "Pterodactyl monitor audit: user=%s (%s) command=/server %s "
+        "query=%r resolved=%s outcome=%s reason=%s last_state=%s",
+        user_name,
+        user_id,
+        accepted_result.action,
+        accepted_result.query,
+        _format_server_label(result.server),
+        outcome,
+        reason,
+        last_state if last_state is not None else "-",
+    )
+
+
 def _resolved_server_for_result(result: ActionResult) -> DiscoveredServer | None:
     if isinstance(result, (ServerActionAccepted, ServerActionNoOp, ServerActionDenied)):
         return result.server
@@ -412,6 +456,112 @@ def _action_outcome_fields(result: ActionResult) -> tuple[str, str, str]:
 
     message = f"Unsupported action result: {type(result)!r}"
     raise AssertionError(message)
+
+
+def _action_monitor_outcome_fields(result: ActionMonitorResult) -> tuple[str, str, str | None]:
+    if isinstance(result, ActionMonitorSuccess):
+        return ("success", result.final_state, result.final_state)
+    if isinstance(result, ActionMonitorTimeout):
+        return ("timeout", result.timeout_kind, result.last_state)
+    if isinstance(result, ActionMonitorUnconfirmed):
+        return ("unconfirmed", result.reason, result.last_state)
+    if isinstance(result, ActionMonitorError):
+        return ("monitor-error", result.reason, result.last_state)
+
+    message = f"Unsupported action monitor result: {type(result)!r}"
+    raise AssertionError(message)
+
+
+async def _handle_power_command(
+    interaction: Any,
+    *,
+    action: str,
+    query: str,
+    result: ActionResult,
+    bridge: ServerCommandBridge,
+) -> None:
+    _audit_action_result(interaction, action=action, query=query, result=result)
+    await interaction.response.send_message(_format_action_result(result))
+    if isinstance(result, ServerActionAccepted):
+        _spawn_action_followup(interaction, bridge=bridge, accepted_result=result)
+
+
+def _spawn_action_followup(
+    interaction: Any,
+    *,
+    bridge: ServerCommandBridge,
+    accepted_result: ServerActionAccepted,
+) -> None:
+    asyncio.create_task(
+        _monitor_and_send_action_followup(
+            interaction,
+            bridge=bridge,
+            accepted_result=accepted_result,
+        )
+    )
+
+
+async def _monitor_and_send_action_followup(
+    interaction: Any,
+    *,
+    bridge: ServerCommandBridge,
+    accepted_result: ServerActionAccepted,
+) -> None:
+    try:
+        result = await bridge.monitor_action(accepted_result)
+        _audit_action_monitor_result(
+            interaction,
+            accepted_result=accepted_result,
+            result=result,
+        )
+        await interaction.followup.send(_format_action_monitor_result(result))
+    except Exception:
+        LOGGER.exception(
+            "Failed to send action follow-up for /server %s %r",
+            accepted_result.action,
+            accepted_result.query,
+        )
+
+
+def _format_action_monitor_result(result: ActionMonitorResult) -> str:
+    if not isinstance(
+        result,
+        (
+            ActionMonitorSuccess,
+            ActionMonitorTimeout,
+            ActionMonitorUnconfirmed,
+            ActionMonitorError,
+        ),
+    ):
+        message = f"Unsupported action monitor result: {type(result)!r}"
+        raise AssertionError(message)
+
+    label = _format_server_label(result.server)
+    action_name = result.action.capitalize()
+    if isinstance(result, ActionMonitorSuccess):
+        if result.action == "start":
+            return f"{label} finished starting and is now {result.final_state}."
+        if result.action == "stop":
+            return f"{label} finished stopping and is now {result.final_state}."
+        if result.action == "restart":
+            return f"{label} finished restarting and is now {result.final_state}."
+        message = f"Unsupported monitor success action: {result.action!r}"
+        raise AssertionError(message)
+    if isinstance(result, ActionMonitorTimeout):
+        return (
+            f"{action_name} request was accepted for {label}, but completion could not be "
+            "confirmed before the monitoring timeout. Please check Pterodactyl manually."
+        )
+    if isinstance(result, ActionMonitorUnconfirmed):
+        return (
+            f"{action_name} request was accepted for {label}, but completion could not be "
+            "confirmed automatically. Please check Pterodactyl manually."
+        )
+    if isinstance(result, ActionMonitorError):
+        return (
+            f"{action_name} request was accepted for {label}, but completion monitoring "
+            "hit an unexpected error. Please check Pterodactyl manually."
+        )
 
 
 def _build_help_message() -> str:

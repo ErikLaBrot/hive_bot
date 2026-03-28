@@ -9,6 +9,7 @@ from hive_bot.pterodactyl import (
     BudgetResult,
     BudgetStatus,
     DiscoveredServer,
+    DiscoveredServers,
     DiscoverServersResult,
     PanelUnavailable,
     ServerNotFound,
@@ -104,6 +105,9 @@ def build_server_group(*, app_commands_module: Any, bridge: ReadOnlyServerBridge
 def _format_discover_servers_result(result: DiscoverServersResult) -> str:
     if isinstance(result, PanelUnavailable):
         return result.message
+    if not isinstance(result, DiscoveredServers):
+        message = f"Unsupported discover servers result: {type(result)!r}"
+        raise AssertionError(message)
     if not result.servers:
         return "No Pterodactyl servers are currently discoverable by the bot."
 
@@ -155,6 +159,8 @@ def _format_budget_status_message(result: BudgetStatus) -> str:
     lines = [
         "Server budget status:",
         f"- Max running servers: {result.max_running_servers}",
+        # The config key remains `max_total_ram_gb`, but the bridge and policy
+        # calculations intentionally treat that value as binary GiB.
         f"- Max RAM budget: {result.max_total_ram_gb} GiB",
         f"- Currently running: {result.running_server_count}",
     ]
@@ -162,11 +168,12 @@ def _format_budget_status_message(result: BudgetStatus) -> str:
     if result.consumed_memory_mib is None or result.remaining_memory_mib is None:
         lines.append("- Consumed RAM limit: unavailable (missing memory limits)")
         lines.append("- Remaining RAM headroom: unavailable")
-        missing = ", ".join(
-            f"{server.name} (`{server.identifier}`)"
-            for server in result.missing_memory_limit_servers
-        )
-        lines.append(f"- Missing RAM limit data for: {missing}")
+        if result.missing_memory_limit_servers:
+            missing = ", ".join(
+                f"{server.name} (`{server.identifier}`)"
+                for server in result.missing_memory_limit_servers
+            )
+            lines.append(f"- Missing RAM limit data for: {missing}")
     else:
         lines.append(f"- Consumed RAM limit: {result.consumed_memory_mib} MiB")
         if result.remaining_memory_mib < 0:

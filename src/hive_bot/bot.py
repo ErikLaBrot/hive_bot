@@ -27,6 +27,8 @@ def create_bot(
 ) -> Any:
     """Construct the Discord bot and attach milestone startup hooks."""
 
+    # Bridge construction is pure dependency wiring; all panel I/O remains in
+    # command-time bridge methods.
     pterodactyl_bridge = pterodactyl_bridge_factory(config.pterodactyl, config.policy)
 
     async def setup_hook(self: Any) -> None:

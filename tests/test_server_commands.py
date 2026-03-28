@@ -322,6 +322,43 @@ def test_handle_server_budget_formats_partial_budget_status() -> None:
     ]
 
 
+def test_handle_server_budget_omits_empty_missing_memory_line() -> None:
+    bridge = FakeReadOnlyBridge(
+        budget_result=BudgetStatus(
+            max_running_servers=2,
+            max_total_ram_gb=10,
+            running_server_count=1,
+            running_servers=(
+                discovered_server(
+                    name="Alpha",
+                    identifier="alpha-1",
+                    state="running",
+                    memory_limit_mib=None,
+                ),
+            ),
+            consumed_memory_mib=None,
+            remaining_memory_mib=None,
+            has_complete_memory_data=False,
+            missing_memory_limit_servers=(),
+        )
+    )
+    interaction = FakeInteraction()
+
+    asyncio.run(handle_server_budget(interaction, bridge=bridge))
+
+    assert interaction.response.messages == [
+        (
+            "Server budget status:\n"
+            "- Max running servers: 2\n"
+            "- Max RAM budget: 10 GiB\n"
+            "- Currently running: 1\n"
+            "- Consumed RAM limit: unavailable (missing memory limits)\n"
+            "- Remaining RAM headroom: unavailable\n"
+            "- Running servers: Alpha (`alpha-1`)"
+        )
+    ]
+
+
 def test_handle_server_budget_formats_over_budget_headroom() -> None:
     bridge = FakeReadOnlyBridge(
         budget_result=BudgetStatus(
@@ -451,6 +488,11 @@ def test_build_server_group_creates_named_subcommands() -> None:
 def test_format_server_status_result_rejects_unsupported_type() -> None:
     with pytest.raises(AssertionError, match="Unsupported server status result"):
         server_commands._format_server_status_result(cast(Any, object()))
+
+
+def test_format_discover_servers_result_rejects_unsupported_type() -> None:
+    with pytest.raises(AssertionError, match="Unsupported discover servers result"):
+        server_commands._format_discover_servers_result(cast(Any, object()))
 
 
 def test_format_budget_result_rejects_unsupported_type() -> None:

@@ -76,6 +76,7 @@ def build_fake_discord_module(*, default_intents: str = "default-intents") -> tu
 
 
 def test_create_bot_builds_discord_bot_with_default_intents() -> None:
+    config = build_config()
     register_calls: list[tuple[Any, Any, Any]] = []
     sync_calls: list[tuple[Any, Any]] = []
     bridge_factory_calls: list[tuple[Any, Any]] = []
@@ -99,7 +100,7 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
         return fake_bridge
 
     bot = create_bot(
-        build_config(),
+        config,
         discord_module=fake_discord_module,
         commands_module=FakeCommandsModule,
         register_commands_func=fake_register_commands,
@@ -114,8 +115,8 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
     assert bot.listeners[0][1] == "on_ready"
     assert bridge_factory_calls == [
         (
-            build_config().pterodactyl,
-            build_config().policy,
+            config.pterodactyl,
+            config.policy,
         )
     ]
 

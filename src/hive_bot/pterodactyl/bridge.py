@@ -17,6 +17,7 @@ from hive_bot.pterodactyl.client import (
     create_client,
 )
 from hive_bot.pterodactyl.models import (
+    ActionResult,
     AmbiguousServerMatch,
     BudgetResult,
     BudgetStatus,
@@ -26,6 +27,9 @@ from hive_bot.pterodactyl.models import (
     PanelUnavailable,
     ResolvedServer,
     ResolveServerResult,
+    ServerActionAccepted,
+    ServerActionDenied,
+    ServerActionNoOp,
     ServerNotFound,
     ServerStatus,
     ServerStatusResult,
@@ -108,9 +112,143 @@ class PterodactylBridge:
         if isinstance(discovered_result, PanelUnavailable):
             return discovered_result
 
-        running_servers = tuple(
-            server for server in discovered_result.servers if _is_running_state(server.state)
-        )
+        return self._build_budget_status(discovered_result.servers)
+
+    async def start_server(self, query: str) -> ActionResult:
+        """Start a resolved server if policy checks allow it."""
+
+        try:
+            async with self._open_client() as client:
+                try:
+                    discovered_servers = await self._discover_servers_in_session(client)
+                except Exception as exc:
+                    return self._panel_unavailable("discover servers", exc)
+
+                resolve_result = _resolve_from_servers(query, discovered_servers)
+                if not isinstance(resolve_result, ResolvedServer):
+                    return resolve_result
+
+                target_server = resolve_result.server
+                if _is_running_state(target_server.state):
+                    return ServerActionNoOp(
+                        action="start",
+                        query=query,
+                        server=target_server,
+                        reason="already-running",
+                    )
+
+                running_servers = tuple(
+                    server for server in discovered_servers if _is_running_state(server.state)
+                )
+                if len(running_servers) >= self._policy.max_running_servers:
+                    return ServerActionDenied(
+                        action="start",
+                        query=query,
+                        reason="max-running-servers",
+                        server=target_server,
+                        running_server_count=len(running_servers),
+                        max_running_servers=self._policy.max_running_servers,
+                    )
+
+                if target_server.memory_limit_mib is None:
+                    return ServerActionDenied(
+                        action="start",
+                        query=query,
+                        reason="missing-target-memory-limit",
+                        server=target_server,
+                    )
+
+                budget_status = self._build_budget_status(discovered_servers)
+                if not budget_status.has_complete_memory_data:
+                    return ServerActionDenied(
+                        action="start",
+                        query=query,
+                        reason="missing-running-memory-limits",
+                        server=target_server,
+                        missing_memory_limit_servers=budget_status.missing_memory_limit_servers,
+                    )
+
+                required_memory_mib = target_server.memory_limit_mib
+                remaining_memory_mib = cast(int, budget_status.remaining_memory_mib)
+                if required_memory_mib > remaining_memory_mib:
+                    return ServerActionDenied(
+                        action="start",
+                        query=query,
+                        reason="insufficient-ram-headroom",
+                        server=target_server,
+                        required_memory_mib=required_memory_mib,
+                        remaining_memory_mib=remaining_memory_mib,
+                    )
+
+                await client.client.servers.send_power_action(target_server.identifier, "start")
+        except Exception as exc:
+            return self._panel_unavailable("start server", exc)
+
+        return ServerActionAccepted(action="start", query=query, server=target_server)
+
+    async def stop_server(self, query: str) -> ActionResult:
+        """Stop a resolved server if it is currently running."""
+
+        try:
+            async with self._open_client() as client:
+                try:
+                    discovered_servers = await self._discover_servers_in_session(client)
+                except Exception as exc:
+                    return self._panel_unavailable("discover servers", exc)
+
+                resolve_result = _resolve_from_servers(query, discovered_servers)
+                if not isinstance(resolve_result, ResolvedServer):
+                    return resolve_result
+
+                target_server = resolve_result.server
+                if not _is_running_state(target_server.state):
+                    return ServerActionNoOp(
+                        action="stop",
+                        query=query,
+                        server=target_server,
+                        reason="already-stopped",
+                    )
+
+                await client.client.servers.send_power_action(target_server.identifier, "stop")
+        except Exception as exc:
+            return self._panel_unavailable("stop server", exc)
+
+        return ServerActionAccepted(action="stop", query=query, server=target_server)
+
+    async def restart_server(self, query: str) -> ActionResult:
+        """Restart a resolved server if it is currently running."""
+
+        try:
+            async with self._open_client() as client:
+                try:
+                    discovered_servers = await self._discover_servers_in_session(client)
+                except Exception as exc:
+                    return self._panel_unavailable("discover servers", exc)
+
+                resolve_result = _resolve_from_servers(query, discovered_servers)
+                if not isinstance(resolve_result, ResolvedServer):
+                    return resolve_result
+
+                target_server = resolve_result.server
+                if not _is_running_state(target_server.state):
+                    return ServerActionDenied(
+                        action="restart",
+                        query=query,
+                        reason="not-running",
+                        server=target_server,
+                    )
+
+                await client.client.servers.send_power_action(target_server.identifier, "restart")
+        except Exception as exc:
+            return self._panel_unavailable("restart server", exc)
+
+        return ServerActionAccepted(action="restart", query=query, server=target_server)
+
+    def _open_client(self) -> ClientContextManager:
+        return self._client_factory(self._config)
+
+    def _build_budget_status(self, servers: tuple[DiscoveredServer, ...]) -> BudgetStatus:
+        running_servers = tuple(server for server in servers if _is_running_state(server.state))
         missing_memory_servers = tuple(
             server for server in running_servers if server.memory_limit_mib is None
         )
@@ -137,9 +275,6 @@ class PterodactylBridge:
             has_complete_memory_data=has_complete_memory_data,
             missing_memory_limit_servers=missing_memory_servers,
         )
-
-    def _open_client(self) -> ClientContextManager:
-        return self._client_factory(self._config)
 
     async def _discover_servers_in_session(
         self,

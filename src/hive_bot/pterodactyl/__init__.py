@@ -3,6 +3,7 @@
 from hive_bot.pterodactyl.bridge import PterodactylBridge
 from hive_bot.pterodactyl.client import create_client
 from hive_bot.pterodactyl.models import (
+    ActionResult,
     AmbiguousServerMatch,
     BudgetResult,
     BudgetStatus,
@@ -12,12 +13,16 @@ from hive_bot.pterodactyl.models import (
     PanelUnavailable,
     ResolvedServer,
     ResolveServerResult,
+    ServerActionAccepted,
+    ServerActionDenied,
+    ServerActionNoOp,
     ServerNotFound,
     ServerStatus,
     ServerStatusResult,
 )
 
 __all__ = [
+    "ActionResult",
     "AmbiguousServerMatch",
     "BudgetResult",
     "BudgetStatus",
@@ -28,6 +33,9 @@ __all__ = [
     "PterodactylBridge",
     "ResolveServerResult",
     "ResolvedServer",
+    "ServerActionAccepted",
+    "ServerActionDenied",
+    "ServerActionNoOp",
     "ServerNotFound",
     "ServerStatusResult",
     "ServerStatus",

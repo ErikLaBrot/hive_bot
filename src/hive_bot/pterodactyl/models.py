@@ -80,7 +80,49 @@ class BudgetStatus:
     missing_memory_limit_servers: tuple[DiscoveredServer, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ServerActionAccepted:
+    """A power action request was accepted for a resolved server."""
+
+    action: str
+    query: str
+    server: DiscoveredServer
+
+
+@dataclass(frozen=True, slots=True)
+class ServerActionNoOp:
+    """A power action resolved cleanly but did not need to change state."""
+
+    action: str
+    query: str
+    server: DiscoveredServer
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ServerActionDenied:
+    """A power action was denied after validation or policy checks."""
+
+    action: str
+    query: str
+    reason: str
+    server: DiscoveredServer | None = None
+    running_server_count: int | None = None
+    max_running_servers: int | None = None
+    required_memory_mib: int | None = None
+    remaining_memory_mib: int | None = None
+    missing_memory_limit_servers: tuple[DiscoveredServer, ...] = ()
+
+
 type DiscoverServersResult = DiscoveredServers | PanelUnavailable
 type ResolveServerResult = ResolvedServer | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
 type ServerStatusResult = ServerStatus | ServerNotFound | AmbiguousServerMatch | PanelUnavailable
 type BudgetResult = BudgetStatus | PanelUnavailable
+type ActionResult = (
+    ServerActionAccepted
+    | ServerActionNoOp
+    | ServerActionDenied
+    | ServerNotFound
+    | AmbiguousServerMatch
+    | PanelUnavailable
+)

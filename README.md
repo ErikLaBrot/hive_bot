@@ -10,6 +10,8 @@ infrastructure. Issue `#5` wires those pieces into a live Discord client.
 Issue `#13` adds the Pterodactyl configuration and bridge foundation that later
 milestone work will use for discovery-first server management. Issue `#11`
 adds the first `/server` read-only Discord commands on top of that bridge.
+Issue `#12` adds the controlled `/server` power actions with policy enforcement
+and audit logging.
 
 ## Setup
 
@@ -79,22 +81,40 @@ supports:
 - exact server resolution by name or identifier
 - current status lookup
 - policy budget summaries based on discovered RAM limits
+- controlled start, stop, and restart requests for discoverable servers
 
 If the panel is unreachable or memory data is incomplete, the bridge returns
 structured safe results instead of leaking raw API exceptions.
 
-## `/server` Read-Only Commands
+## `/server` Commands
 
-Issue `#11` adds the first discovery-driven `/server` command group:
+Issues `#11` and `#12` add the discovery-driven `/server` command group:
 
 - `/server list`
 - `/server status <server>`
+- `/server start <server>`
+- `/server stop <server>`
+- `/server restart <server>`
 - `/server budget`
 - `/server help`
 
 These commands always discover the accessible Pterodactyl server inventory at
 invocation time, then format safe Discord responses for success, not-found,
-ambiguous-match, partial-budget, and panel-unreachable results.
+ambiguous-match, partial-budget, policy denial, no-op, and panel-unreachable
+results.
+
+The power commands are intentionally conservative:
+
+- `/server start` denies the request if the bot would exceed
+  `max_running_servers`, exceed `max_total_ram_gb`, or cannot compute RAM
+  safety confidently because the target or currently running discovered servers
+  have unknown RAM limits.
+- `/server stop` only acts on servers that discovery shows as running.
+- `/server restart` only acts on servers that discovery shows as running and
+  never behaves like an implicit start.
+- every `/server start`, `/server stop`, and `/server restart` attempt emits an
+  audit log entry with the Discord user, query, resolved server, outcome, and
+  denial reason when applicable.
 
 ## Quality Checks
 
@@ -120,8 +140,7 @@ When the bot connects successfully, it will:
 - register the milestone commands on its command tree
 - sync those commands to the configured target guild
 - log the connected bot identity for manual ready-state verification
-- expose `/ping` and the read-only `/server` command group in the configured
-  guild
+- expose `/ping` and the `/server` command group in the configured guild
 
 ## Manual Validation
 
@@ -131,6 +150,11 @@ When the bot connects successfully, it will:
 3. Run `python3 -m hive_bot --config config.local.toml`.
 4. Verify the bot appears online and logs that it is ready.
 5. Verify `/ping` appears in the configured guild and responds with `pong`.
-6. Verify `/server help` appears and lists the available read-only commands.
+6. Verify `/server help` appears and lists all supported commands.
 7. Verify `/server list`, `/server status <server>`, and `/server budget`
    return live Pterodactyl-backed responses for the configured bot user.
+8. Verify `/server start <server>`, `/server stop <server>`, and
+   `/server restart <server>` return clean accepted, denied, or no-op
+   responses based on live discovery and policy limits.
+9. Verify the bot logs an audit entry for each `/server start`, `/server stop`,
+   and `/server restart` attempt.

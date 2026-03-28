@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any
 
@@ -113,6 +114,7 @@ def test_create_bot_builds_discord_bot_with_default_intents() -> None:
     assert intents_calls == ["default"]
     assert len(bot.listeners) == 1
     assert bot.listeners[0][1] == "on_ready"
+    assert inspect.iscoroutinefunction(bot.listeners[0][0])
     assert bridge_factory_calls == [
         (
             config.pterodactyl,

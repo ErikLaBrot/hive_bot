@@ -281,6 +281,47 @@ def test_load_config_raises_for_logging_section_that_is_not_a_table(tmp_path: Pa
     [
         (
             (
+                'pterodactyl = "https://panel.example.com"\n\n'
+                "[discord]\n"
+                'token = "token-value"\n'
+                "guild_id = 42\n\n"
+                "[policy]\n"
+                "max_running_servers = 2\n"
+                "max_total_ram_gb = 10\n"
+            ),
+            "pterodactyl must be a table",
+        ),
+        (
+            (
+                "policy = 10\n\n"
+                "[discord]\n"
+                'token = "token-value"\n'
+                "guild_id = 42\n\n"
+                "[pterodactyl]\n"
+                'panel_url = "https://panel.example.com"\n'
+                'api_key = "ptlc_test"\n\n'
+            ),
+            "policy must be a table",
+        ),
+    ],
+)
+def test_load_config_raises_for_invalid_new_sections(
+    tmp_path: Path,
+    config_contents: str,
+    expected_message: str,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(config_contents, encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=expected_message):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("config_contents", "expected_message"),
+    [
+        (
+            (
                 "[discord]\n"
                 'token = "token-value"\n'
                 "guild_id = 42\n\n"

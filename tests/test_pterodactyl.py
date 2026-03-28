@@ -62,6 +62,8 @@ class FakeServersApi:
         params: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         del detail, includes, params
+        if server_id not in self.detail_by_identifier:
+            raise AssertionError(f"Missing fake server details for {server_id}")
         return self.detail_by_identifier[server_id]
 
     async def get_server_utilization(
@@ -244,12 +246,94 @@ def test_discover_servers_accepts_plain_list_results_and_uses_fallback_values() 
 
     assert isinstance(result, DiscoveredServers)
     assert len(result.servers) == 1
-    assert result.servers[0].name == "unknown"
-    assert result.servers[0].identifier == "unknown"
+    assert result.servers[0].name == "unnamed-server"
+    assert result.servers[0].identifier == "unknown-identifier"
     assert result.servers[0].uuid is None
     assert result.servers[0].internal_id is None
     assert result.servers[0].state is None
     assert result.servers[0].memory_limit_mib is None
+
+
+def test_discover_servers_uses_distinct_identity_fallbacks_and_logs_warnings(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge = build_bridge(
+        list_result=[
+            discovered_item(
+                name="   ",
+                identifier="",
+                state="offline",
+                memory_limit_mib=1024,
+                internal_id=1,
+            ),
+            discovered_item(
+                name="   ",
+                identifier="",
+                state="offline",
+                memory_limit_mib=1024,
+                internal_id=2,
+            ),
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(bridge.discover_servers())
+
+    assert isinstance(result, DiscoveredServers)
+    assert tuple(server.name for server in result.servers) == (
+        "unnamed-server-1",
+        "unnamed-server-2",
+    )
+    assert tuple(server.identifier for server in result.servers) == (
+        "unknown-identifier-1",
+        "unknown-identifier-2",
+    )
+    assert (
+        "Discovered server missing name; using fallback unnamed-server-1" in caplog.text
+    )
+    assert (
+        "Discovered server missing identifier; using fallback unknown-identifier-2"
+        in caplog.text
+    )
+
+
+def test_discover_servers_uses_identifier_based_name_fallback() -> None:
+    bridge = build_bridge(
+        list_result=[
+            discovered_item(
+                name="   ",
+                identifier="alpha-1",
+                state="offline",
+                memory_limit_mib=1024,
+            )
+        ]
+    )
+
+    result = asyncio.run(bridge.discover_servers())
+
+    assert isinstance(result, DiscoveredServers)
+    assert result.servers[0].name == "unnamed-server-alpha-1"
+    assert result.servers[0].identifier == "alpha-1"
+
+
+def test_discover_servers_uses_uuid_based_identifier_fallback() -> None:
+    bridge = build_bridge(
+        list_result=[
+            discovered_item(
+                name="Alpha",
+                identifier="",
+                state="offline",
+                memory_limit_mib=1024,
+                uuid="uuid-alpha",
+            )
+        ]
+    )
+
+    result = asyncio.run(bridge.discover_servers())
+
+    assert isinstance(result, DiscoveredServers)
+    assert result.servers[0].name == "Alpha"
+    assert result.servers[0].identifier == "unknown-identifier-uuid-alpha"
 
 
 def test_discover_servers_returns_panel_unavailable_for_expected_api_errors(

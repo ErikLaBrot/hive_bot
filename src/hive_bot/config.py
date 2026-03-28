@@ -66,6 +66,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Config file is not valid TOML: {path}") from exc
 
+    _require_mapping(config_data, ("pterodactyl",))
+    _require_mapping(config_data, ("policy",))
+
     return AppConfig(
         discord=DiscordConfig(
             token=_require_non_empty_string(config_data, ("discord", "token")),

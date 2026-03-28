@@ -155,6 +155,7 @@ class PterodactylBridge:
             # single page list, so this warning is only about that shim path.
             # Use >= 100 because the compat response gives us no pagination
             # metadata, so exactly 100 results may still mean "there were more."
+            # Paginated responses are handled by collect_async() below.
             if len(response) >= 100:
                 self._logger.warning(
                     "Received %s servers from a plain-list py-dactyl response; "
@@ -167,14 +168,36 @@ class PterodactylBridge:
 
     def _parse_server(self, payload: dict[str, Any]) -> DiscoveredServer:
         attributes = _coerce_attributes(payload)
+        uuid = _read_optional_string(attributes.get("uuid"))
+        internal_id = _read_optional_int(attributes.get("internal_id"))
+        name = _read_optional_string(attributes.get("name"))
+        identifier = _read_optional_string(attributes.get("identifier"))
+
+        if name is None:
+            name = _fallback_server_identity(
+                "unnamed-server",
+                identifier=identifier,
+                uuid=uuid,
+                internal_id=internal_id,
+            )
+            self._logger.warning("Discovered server missing name; using fallback %s", name)
+
+        if identifier is None:
+            identifier = _fallback_server_identity(
+                "unknown-identifier",
+                uuid=uuid,
+                internal_id=internal_id,
+            )
+            self._logger.warning(
+                "Discovered server missing identifier; using fallback %s",
+                identifier,
+            )
+
         return DiscoveredServer(
-            name=_read_required_string(attributes.get("name"), fallback="unknown"),
-            identifier=_read_required_string(
-                attributes.get("identifier"),
-                fallback="unknown",
-            ),
-            uuid=_read_optional_string(attributes.get("uuid")),
-            internal_id=_read_optional_int(attributes.get("internal_id")),
+            name=name,
+            identifier=identifier,
+            uuid=uuid,
+            internal_id=internal_id,
             state=_read_optional_string(attributes.get("current_state")),
             memory_limit_mib=_read_memory_limit(attributes),
         )
@@ -224,12 +247,20 @@ def _coerce_attributes(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _read_required_string(value: object, *, fallback: str) -> str:
-    if isinstance(value, str):
-        normalized = value.strip()
-        if normalized:
-            return normalized
-    return fallback
+def _fallback_server_identity(
+    prefix: str,
+    *,
+    identifier: str | None = None,
+    uuid: str | None = None,
+    internal_id: int | None = None,
+) -> str:
+    if identifier is not None:
+        return f"{prefix}-{identifier}"
+    if uuid is not None:
+        return f"{prefix}-{uuid}"
+    if internal_id is not None:
+        return f"{prefix}-{internal_id}"
+    return prefix
 
 
 def _read_optional_string(value: object) -> str | None:
